@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CloudMusic2KTV · 素材下载</title>
+  <title>CloudMusic2KTV · 素材与视频</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
   <main class="shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">CloudMusic2KTV · STEP 01</p>
-        <h1>先把一首歌，完整带回本地。</h1>
-        <p class="lede">音频、高清封面、原文/翻译/罗马音歌词，以及可直接用于视频渲染的毫秒时间轴。</p>
+        <p class="eyebrow">CloudMusic2KTV · PERSONAL SINGING VIDEO</p>
+        <h1>从一首歌，到一支可以跟唱的视频。</h1>
+        <p class="lede">取得音频、封面和时间轴，预览画面样式，然后生成可直接播放的 KTV 视频。</p>
       </div>
       <div id="accountPill" class="account-pill"><span class="dot"></span><span>检查登录状态…</span></div>
     </header>
@@ -84,9 +84,101 @@
     </section>
 
     <section id="downloadResult" class="result card hidden"></section>
+
+    <section id="videoBuilder" class="video-builder card hidden">
+      <div class="card-title video-heading">
+        <span class="step">03</span>
+        <div><h2>生成 KTV 视频</h2><p>设置改变后会使用同一套 Python 渲染器更新预览</p></div>
+      </div>
+      <div class="video-song-target" aria-live="polite">
+        <img id="videoSongCover" alt="当前视频歌曲封面">
+        <div class="video-song-copy">
+          <span class="target-label">当前视频歌曲</span>
+          <strong id="videoSongTitle">尚未选择歌曲</strong>
+          <span id="videoSongMeta">请先在 02 区读取歌曲或点击搜索结果</span>
+        </div>
+        <span id="videoSongState" class="target-state">等待选择</span>
+      </div>
+      <p id="videoSongHint" class="selection-hint">03 区跟随 02 区最后一次成功读取的歌曲；仅修改输入框不会切换歌曲。</p>
+      <div class="builder-layout">
+        <div class="video-options">
+          <div class="option-grid">
+            <label>歌词显示
+              <select id="lyricMode">
+                <option value="original">仅原文</option>
+                <option value="translation">原文 + 翻译</option>
+                <option value="romanization">原文 + 罗马音</option>
+              </select>
+            </label>
+            <label>背景生成方式
+              <select id="backgroundMode">
+                <option value="blur">封面模糊并压暗</option>
+                <option value="gradient">提取封面色生成渐变</option>
+                <option value="solid">纯色背景</option>
+                <option value="custom">自定义背景图片</option>
+              </select>
+            </label>
+            <label id="backgroundColorWrap" class="hidden">背景颜色
+              <input id="backgroundColor" type="color" value="#171b26">
+            </label>
+            <label id="customBackgroundWrap" class="hidden">背景图片
+              <input id="customBackground" type="file" accept="image/png,image/jpeg,image/webp">
+            </label>
+            <label>歌词扫色
+              <select id="accentMode">
+                <option value="blue">默认蓝色</option>
+                <option value="cover">自动匹配封面</option>
+                <option value="custom">自定义颜色</option>
+              </select>
+            </label>
+            <label id="accentColorWrap" class="hidden">扫色颜色
+              <input id="accentColor" type="color" value="#4f8cff">
+            </label>
+            <label>分辨率
+              <select id="videoResolution">
+                <option value="1080p" selected>1920 × 1080</option>
+                <option value="720p">1280 × 720</option>
+              </select>
+            </label>
+            <label>视频画质
+              <select id="videoQuality">
+                <option value="high">高画质 · 较慢</option>
+                <option value="balanced" selected>平衡</option>
+                <option value="compact">较小文件 · 较快</option>
+              </select>
+            </label>
+          </div>
+          <div class="toggle-list">
+            <label class="toggle"><input id="spectrumEnabled" type="checkbox" checked><span>显示动态频谱</span></label>
+            <label class="range-label">频谱强度 <input id="spectrumOpacity" type="range" min="10" max="100" value="65"><output id="spectrumValue">65%</output></label>
+            <label class="toggle"><input id="openingEnabled" type="checkbox" checked><span>自动开场动画</span></label>
+            <label class="toggle"><input id="interludeEnabled" type="checkbox" checked><span>间奏结束前 4 秒显示歌词提示</span></label>
+          </div>
+          <p class="fineprint">相邻歌词开始时间超过 15 秒时视为间奏；上一句扫色最长 8 秒。</p>
+        </div>
+        <div class="preview-panel">
+          <div class="preview-stage">
+            <img id="videoPreviewImage" alt="视频画面预览">
+            <div id="previewPlaceholder">正在准备实际歌曲预览…</div>
+          </div>
+          <div class="preview-actions">
+            <span id="previewMeta">预览尚未生成</span>
+            <button id="refreshPreview" class="secondary compact">更新预览</button>
+          </div>
+        </div>
+      </div>
+      <div class="render-row">
+        <button id="renderVideo" class="primary render-button">生成完整视频</button>
+        <div id="renderProgress" class="render-progress hidden">
+          <div id="renderTaskSong" class="render-task-song hidden"></div>
+          <div class="progress-track"><div id="progressFill"></div></div>
+          <div class="progress-copy"><span id="progressMessage">等待渲染</span><strong id="progressPercent">0%</strong></div>
+        </div>
+      </div>
+      <section id="videoResult" class="video-result hidden"></section>
+    </section>
     <div id="toast" role="status" aria-live="polite"></div>
   </main>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
-
