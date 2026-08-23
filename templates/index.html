@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CloudMusic2KTV · 素材下载</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">CloudMusic2KTV · STEP 01</p>
+        <h1>先把一首歌，完整带回本地。</h1>
+        <p class="lede">音频、高清封面、原文/翻译/罗马音歌词，以及可直接用于视频渲染的毫秒时间轴。</p>
+      </div>
+      <div id="accountPill" class="account-pill"><span class="dot"></span><span>检查登录状态…</span></div>
+    </header>
+
+    <section class="grid">
+      <article class="card auth-card">
+        <div class="card-title">
+          <span class="step">01</span>
+          <div><h2>网易云账号</h2><p>手机号 + 短信验证码</p></div>
+        </div>
+        <div id="loggedOut">
+          <label>国家/地区代码</label>
+          <div class="phone-row">
+            <input id="countryCode" value="86" inputmode="numeric" aria-label="国家地区代码">
+            <input id="phone" placeholder="手机号" inputmode="tel" autocomplete="tel">
+          </div>
+          <button id="sendCaptcha" class="secondary">获取验证码</button>
+          <label for="captcha">短信验证码</label>
+          <input id="captcha" placeholder="请输入验证码" inputmode="numeric" autocomplete="one-time-code">
+          <button id="login" class="primary">登录账号</button>
+          <p class="fineprint">手机号与验证码不会写入磁盘；登录成功后只在 <code>instance/</code> 保存会话 Cookie。</p>
+        </div>
+        <div id="loggedIn" class="hidden logged-in">
+          <div class="avatar-wrap"><img id="avatar" alt="账号头像"></div>
+          <div><strong id="nickname"></strong><p>已可使用此账号的网页播放权益</p></div>
+          <button id="logout" class="text-button">退出</button>
+        </div>
+      </article>
+
+      <article class="card song-card">
+        <div class="card-title">
+          <span class="step">02</span>
+          <div><h2>选择歌曲</h2><p>ID、歌曲链接，或按名称搜索</p></div>
+        </div>
+        <label for="songInput">歌曲 ID / 网易云链接</label>
+        <div class="inline-row">
+          <input id="songInput" value="3346334398" placeholder="例如 3346334398">
+          <button id="inspect" class="secondary compact">读取</button>
+        </div>
+        <div class="divider"><span>或者</span></div>
+        <label for="searchInput">歌名与歌手</label>
+        <div class="inline-row">
+          <input id="searchInput" placeholder="例如：歌名 歌手">
+          <button id="search" class="secondary compact">搜索</button>
+        </div>
+        <div id="searchResults" class="results hidden"></div>
+      </article>
+    </section>
+
+    <section id="songPreview" class="preview card hidden">
+      <img id="cover" alt="歌曲封面">
+      <div class="song-copy">
+        <p class="eyebrow">READY TO FETCH</p>
+        <h2 id="songName"></h2>
+        <p id="songMeta"></p>
+        <div class="actions">
+          <label class="quality-label">音质
+            <select id="quality">
+              <option value="standard">标准</option>
+              <option value="higher">较高</option>
+              <option value="exhigh" selected>极高</option>
+              <option value="lossless">无损</option>
+              <option value="hires">Hi-Res</option>
+            </select>
+          </label>
+          <button id="download" class="primary download-button">下载全部素材</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="downloadResult" class="result card hidden"></section>
+    <div id="toast" role="status" aria-live="polite"></div>
+  </main>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
+
