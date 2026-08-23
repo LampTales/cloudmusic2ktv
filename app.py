@@ -24,7 +24,7 @@ INSTANCE = ROOT / "instance"
 OUTPUTS = ROOT / "outputs"
 
 app = Flask(__name__, instance_path=str(INSTANCE), instance_relative_config=True)
-app.config.update(JSON_AS_ASCII=False, MAX_CONTENT_LENGTH=32 * 1024)
+app.config.update(JSON_AS_ASCII=False, MAX_CONTENT_LENGTH=32 * 1024 * 1024)
 
 client = NeteaseClient(INSTANCE / "netease_cookies.json")
 downloads = SongDownloadService(client, OUTPUTS)
