@@ -18,6 +18,10 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 FPS = 30
 OPENING_SECONDS = 4.0
+OPENING_HOLD_MS = 3_000
+OPENING_TRANSITION_MS = int(OPENING_SECONDS * 1000) - OPENING_HOLD_MS
+OPENING_COVER_MOVE_RATIO = 0.58
+OPENING_DISC_START_RATIO = 0.62
 INTERLUDE_THRESHOLD_MS = 15_000
 INTERLUDE_COUNTDOWN_MS = 4_000
 MAX_INTERLUDE_SWEEP_MS = 8_000
@@ -183,6 +187,9 @@ class FrameRenderer:
         if self.options.opening and video_time_ms < int(OPENING_SECONDS * 1000):
             return self._render_opening(video_time_ms)
 
+        return self._render_main(song_time_ms)
+
+    def _render_main(self, song_time_ms: int) -> Image.Image:
         frame = self.static_main.copy()
         draw = ImageDraw.Draw(frame)
         self._draw_time(draw, max(0, song_time_ms))
@@ -193,39 +200,126 @@ class FrameRenderer:
 
     def _render_opening(self, video_time_ms: int) -> Image.Image:
         frame = self.background.copy()
+        transition = _ratio(video_time_ms, OPENING_HOLD_MS, int(OPENING_SECONDS * 1000))
+        cover_x, cover_y, cover_size = self._opening_cover_geometry(video_time_ms)
+
         draw = ImageDraw.Draw(frame, "RGBA")
-        progress = min(1.0, max(0.0, video_time_ms / (OPENING_SECONDS * 1000)))
-        eased = 1 - (1 - progress) ** 3
-        cover_size = self._px(410 + 24 * eased)
+        # The disc is deliberately absent during the hold. It starts only after
+        # the cover has nearly reached its main-layout position.
+        disc_progress = _smoothstep(_ratio(transition, OPENING_DISC_START_RATIO, 0.92))
+        if disc_progress > 0:
+            # Keep the disc fixed at its final position and reveal it only
+            # after the cover has settled, so it reads as a background layer.
+            disc_layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+            disc_draw = ImageDraw.Draw(disc_layer, "RGBA")
+            self._draw_disc(
+                disc_draw,
+                (self._px(116), self._px(238), self._px(566), self._px(688)),
+                opacity=disc_progress,
+            )
+            frame = Image.alpha_composite(frame.convert("RGBA"), disc_layer).convert("RGB")
+
         cover = ImageOps.fit(self.cover, (cover_size, cover_size), method=_resampling())
-        cover = _round_image(cover, self._px(22))
-        x = (self.width - cover_size) // 2
-        y = self._px(130 - 12 * eased)
+        cover = _round_image(cover, self._px(18))
         shadow = Image.new("RGBA", frame.size, (0, 0, 0, 0))
         shadow_draw = ImageDraw.Draw(shadow)
         shadow_draw.rounded_rectangle(
-            (x + self._px(12), y + self._px(18), x + cover_size + self._px(12), y + cover_size + self._px(18)),
-            radius=self._px(22), fill=(0, 0, 0, 105)
+            (
+                cover_x + self._px(13), cover_y + self._px(18),
+                cover_x + cover_size + self._px(13), cover_y + cover_size + self._px(18),
+            ),
+            radius=self._px(18), fill=(0, 0, 0, 135)
         )
         shadow = shadow.filter(ImageFilter.GaussianBlur(self._px(18)))
         frame = Image.alpha_composite(frame.convert("RGBA"), shadow).convert("RGB")
-        frame.paste(cover, (x, y), cover if cover.mode == "RGBA" else None)
+        frame.paste(cover, (cover_x, cover_y), cover)
 
-        draw = ImageDraw.Draw(frame, "RGBA")
+        text_layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(text_layer, "RGBA")
         title = str(self.project.song.get("name") or "")
         artist = str(self.project.song.get("artist") or "")
         title_font = self._font(58, bold=True, text=title)
         artist_font = self._font(28, text=artist)
         title_font = self._fit_font(title, title_font, self._px(1000), 58, bold=True)
-        title_y = y + cover_size + self._px(45)
-        self._center_text(draw, title_y, title, title_font, fill=(247, 248, 250, 255), stroke_width=self._px(2))
-        self._center_text(draw, title_y + self._px(76), artist, artist_font, fill=(196, 201, 211, 255), stroke_width=self._px(1))
+        text_alpha = round(255 * (1.0 - _smoothstep(_ratio(transition, 0.0, 0.32))))
+        title_y = cover_y + cover_size + self._px(45)
+        self._center_text(
+            draw, title_y, title, title_font,
+            fill=(247, 248, 250, text_alpha), stroke_width=self._px(2),
+            stroke_fill=(0, 0, 0, text_alpha),
+        )
+        self._center_text(
+            draw, title_y + self._px(76), artist, artist_font,
+            fill=(196, 201, 211, text_alpha), stroke_width=self._px(1),
+            stroke_fill=(0, 0, 0, text_alpha),
+        )
+        frame = Image.alpha_composite(frame.convert("RGBA"), text_layer).convert("RGB")
+
+        self._draw_fade_components(frame, video_time_ms - self.pre_roll_ms, transition)
 
         fade = min(1.0, video_time_ms / 650)
         if fade < 1:
             overlay = Image.new("RGB", frame.size, (5, 7, 11))
             frame = Image.blend(overlay, frame, fade)
         return frame
+
+    def _opening_cover_geometry(self, video_time_ms: int) -> tuple[int, int, int]:
+        transition = _ratio(video_time_ms, OPENING_HOLD_MS, int(OPENING_SECONDS * 1000))
+        motion = _smoothstep(_ratio(transition, 0.0, OPENING_COVER_MOVE_RATIO))
+        cover_size = self._px(430)
+        target_x, target_y = self._px(250), self._px(216)
+        start_x = (self.width - cover_size) // 2
+        cover_x = round(start_x + (target_x - start_x) * motion)
+        return cover_x, target_y, cover_size
+
+    def _draw_fade_components(self, frame: Image.Image, song_time_ms: int, progress: float) -> None:
+        reveal = _smoothstep(_ratio(progress, 0.48, 0.92))
+        if reveal <= 0:
+            return
+        source = self._render_main(song_time_ms)
+        alpha = round(255 * reveal)
+        boxes = (
+            (self._px(72), self._px(52), self.width - self._px(72), self._px(162)),
+            (self._px(760), self._px(290), self.width - self._px(96), self._px(635)),
+            (self._px(52), self._px(680), self.width - self._px(52), self.height - self._px(18)),
+        )
+        for left, top, right, bottom in boxes:
+            crop = source.crop((left, top, right, bottom)).convert("RGBA")
+            crop.putalpha(Image.new("L", crop.size, alpha))
+            frame.paste(crop, (left, top), crop)
+
+    def _draw_disc(
+        self,
+        draw: ImageDraw.ImageDraw,
+        disc_box: tuple[int, int, int, int],
+        *,
+        opacity: float = 1.0,
+    ) -> None:
+        opacity = max(0.0, min(1.0, opacity))
+        disc_alpha = round(255 * opacity)
+        outline_alpha = round(210 * opacity)
+        draw.ellipse(
+            disc_box,
+            fill=(8, 9, 12, disc_alpha),
+            outline=(74, 77, 83, disc_alpha),
+            width=self._px(3),
+        )
+        for inset in range(22, 188, 18):
+            d = self._px(inset)
+            draw.ellipse(
+                (disc_box[0] + d, disc_box[1] + d, disc_box[2] - d, disc_box[3] - d),
+                outline=(49, 52, 58, outline_alpha), width=max(1, self._px(1)),
+            )
+        label_box = tuple(
+            value + self._px(155 if index < 2 else -155)
+            for index, value in enumerate(disc_box)
+        )
+        draw.ellipse(
+            label_box,
+            fill=(*self.accent, round(230 * opacity)),
+            outline=(245, 245, 245, round(190 * opacity)),
+            width=self._px(2),
+        )
 
     def _make_background(self) -> Image.Image:
         size = (self.width, self.height)
@@ -277,15 +371,7 @@ class FrameRenderer:
 
         # Vinyl disc behind the cover.
         disc_box = (self._px(116), self._px(238), self._px(566), self._px(688))
-        draw.ellipse(disc_box, fill=(8, 9, 12, 255), outline=(74, 77, 83, 255), width=self._px(3))
-        for inset in range(22, 188, 18):
-            d = self._px(inset)
-            draw.ellipse(
-                (disc_box[0] + d, disc_box[1] + d, disc_box[2] - d, disc_box[3] - d),
-                outline=(49, 52, 58, 210), width=max(1, self._px(1))
-            )
-        label_box = tuple(v + self._px(155 if i < 2 else -155) for i, v in enumerate(disc_box))
-        draw.ellipse(label_box, fill=(*self.accent, 230), outline=(245, 245, 245, 190), width=self._px(2))
+        self._draw_disc(draw, disc_box)
 
         cover_size = self._px(430)
         cover = ImageOps.fit(self.cover, (cover_size, cover_size), method=_resampling())
@@ -374,11 +460,32 @@ class FrameRenderer:
         current = self.project.timeline[index]
         following = self.project.timeline[index + 1] if index + 1 < len(self.project.timeline) else None
         blocks = [(index, current, progress)]
-        if following:
+        # Keep the next line hidden during an interlude.  It should first
+        # appear as the cue near the end of the gap, giving each section a
+        # clean visual reset instead of leaking the next line into the
+        # previous one.
+        if following and not self._is_interlude_after(index):
             blocks.append((index + 1, following, None))
         for line_index, line, line_progress in blocks:
-            row = line_index % 2
+            row = self._lyric_row(line_index)
             self._draw_lyric_block(frame, line, row, line_progress)
+
+    def _is_interlude_after(self, index: int) -> bool:
+        if index + 1 >= len(self.project.timeline):
+            return False
+        start = int(self.project.timeline[index]["start_ms"])
+        next_start = int(self.project.timeline[index + 1]["start_ms"])
+        return next_start - start >= INTERLUDE_THRESHOLD_MS
+
+    def _lyric_row(self, index: int) -> int:
+        """Return the alternating lyric row, resetting after each interlude."""
+        row = 0
+        for line_index in range(index):
+            if self._is_interlude_after(line_index):
+                row = 0
+            else:
+                row = 1 - row
+        return row
 
     def _draw_lyric_block(
         self, frame: Image.Image, line: dict[str, Any], row: int, progress: float | None
@@ -459,8 +566,10 @@ class FrameRenderer:
         draw = ImageDraw.Draw(frame, "RGBA")
         width = self._px(420)
         height = self._px(8)
-        left = (self.width - width) // 2
-        top = self._px(1002)
+        # Place the cue above the left/top lyric block, matching the usual
+        # KTV layout and keeping the bottom of the frame free for controls.
+        left = self._px(76)
+        top = self._px(665 if self.options.lyric_mode != "original" else 710)
         draw.rounded_rectangle((left, top, left + width, top + height), radius=height // 2, fill=(255, 255, 255, 55))
         draw.rounded_rectangle(
             (left, top, left + int(width * ratio), top + height), radius=height // 2,
@@ -505,10 +614,11 @@ class FrameRenderer:
         *,
         fill: tuple[int, int, int, int],
         stroke_width: int,
+        stroke_fill: tuple[int, int, int, int] = (0, 0, 0, 150),
     ) -> None:
         bbox = draw.textbbox((0, 0), text, font=font)
         x = (self.width - (bbox[2] - bbox[0])) // 2
-        draw.text((x, y), text, font=font, fill=fill, stroke_width=stroke_width, stroke_fill=(0, 0, 0, 150))
+        draw.text((x, y), text, font=font, fill=fill, stroke_width=stroke_width, stroke_fill=stroke_fill)
 
     def _px(self, value: float) -> int:
         return max(1, int(round(value * self.scale)))
@@ -844,8 +954,13 @@ def _format_time(milliseconds: int) -> str:
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
-def _ratio(value: int, start: int, end: int) -> float:
-    return max(0.0, min(1.0, (value - start) / max(1, end - start)))
+def _ratio(value: float, start: float, end: float) -> float:
+    return max(0.0, min(1.0, (value - start) / max(1e-9, end - start)))
+
+
+def _smoothstep(value: float) -> float:
+    value = max(0.0, min(1.0, value))
+    return value * value * (3.0 - 2.0 * value)
 
 
 def _to_bool(value: Any, default: bool) -> bool:

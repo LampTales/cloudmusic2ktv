@@ -52,6 +52,32 @@ def test_opening_adds_preroll_only_when_lyrics_start_early(tmp_path):
     assert make_project(tmp_path / "late", 7000).pre_roll_ms(options) == 0
 
 
+def test_opening_cover_keeps_fixed_size_while_moving(tmp_path):
+    renderer = FrameRenderer(make_project(tmp_path), VideoOptions(spectrum=False))
+    start_x, start_y, start_size = renderer._opening_cover_geometry(500)
+    hold_x, hold_y, hold_size = renderer._opening_cover_geometry(2999)
+    middle_x, middle_y, middle_size = renderer._opening_cover_geometry(3500)
+    end_x, end_y, end_size = renderer._opening_cover_geometry(3999)
+    assert start_x == hold_x > middle_x > end_x
+    assert start_y == hold_y == middle_y == end_y == renderer._px(216)
+    assert start_size == hold_size == middle_size == end_size == renderer._px(430)
+
+
+def test_opening_animation_fills_the_four_second_intro(monkeypatch, tmp_path):
+    renderer = FrameRenderer(make_project(tmp_path), VideoOptions(spectrum=False))
+    opening = Image.new("RGB", renderer.options.size, (0, 0, 0))
+    monkeypatch.setattr(renderer, "_render_opening", lambda video_time_ms: opening)
+    monkeypatch.setattr(renderer, "_render_main", lambda song_time_ms: Image.new("RGB", renderer.options.size, (200, 200, 200)))
+
+    assert renderer.render(3999) is opening
+    assert renderer.render(4000).getpixel((0, 0)) == (200, 200, 200)
+
+
+def test_fractional_animation_ranges_are_not_stretched():
+    assert video_module._ratio(0.5, 0.0, 0.32) == 1.0
+    assert video_module._ratio(0.16, 0.0, 0.32) == 0.5
+
+
 def test_long_gap_becomes_blank_then_four_second_cue(tmp_path):
     project = make_project(tmp_path)
     renderer = FrameRenderer(project, VideoOptions(spectrum=False))
@@ -61,6 +87,36 @@ def test_long_gap_becomes_blank_then_four_second_cue(tmp_path):
     assert cue["kind"] == "cue"
     assert cue["index"] == 1
     assert cue["remaining"] == 3500
+
+
+def test_interlude_hides_following_line_and_resets_to_left_row(tmp_path):
+    project = make_project(tmp_path)
+    renderer = FrameRenderer(project, VideoOptions(spectrum=False))
+    captured = []
+
+    renderer._draw_lyric_block = lambda frame, line, row, progress: captured.append(
+        (line["text"], row, progress)
+    )
+    frame = Image.new("RGB", renderer.options.size, (0, 0, 0))
+
+    renderer._draw_lyric_pair(frame, 0, 0.5)
+    assert captured == [("第一句", 0, 0.5)]
+
+    captured.clear()
+    renderer._draw_lyric_pair(frame, 1, 0.5)
+    assert captured[0] == ("第二句", 0, 0.5)
+
+
+def test_countdown_is_above_left_top_lyric(tmp_path):
+    project = make_project(tmp_path)
+    renderer = FrameRenderer(project, VideoOptions(spectrum=False))
+    frame = Image.new("RGB", renderer.options.size, (0, 0, 0))
+    renderer._draw_countdown(frame, 2_000)
+    # The bar is intentionally in the left lyric area, rather than centered
+    # along the bottom edge.
+    top = renderer._px(710)
+    assert frame.getpixel((renderer._px(100), top + renderer._px(4)))[2] > 0
+    assert frame.getpixel((renderer.width // 2, renderer._px(1002))) == (0, 0, 0)
 
 
 def test_preview_uses_same_frame_renderer(tmp_path):
