@@ -78,6 +78,17 @@ def test_fractional_animation_ranges_are_not_stretched():
     assert video_module._ratio(0.16, 0.0, 0.32) == 0.5
 
 
+def test_log_spectrum_bands_are_all_non_empty():
+    frequencies = video_module.np.fft.rfftfreq(2048, 1 / 11025)
+    bands = video_module._log_band_indices(
+        frequencies, low_hz=45, high_hz=5200, bars=64
+    )
+    assert len(bands) == 64
+    assert all(len(indices) >= 1 for indices in bands)
+    assert bands[0].tolist() == [9]
+    assert bands[1].tolist() == [10]
+
+
 def test_long_gap_becomes_blank_then_four_second_cue(tmp_path):
     project = make_project(tmp_path)
     renderer = FrameRenderer(project, VideoOptions(spectrum=False))

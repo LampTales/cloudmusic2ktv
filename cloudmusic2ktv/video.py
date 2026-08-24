@@ -25,6 +25,7 @@ OPENING_DISC_START_RATIO = 0.62
 INTERLUDE_THRESHOLD_MS = 15_000
 INTERLUDE_COUNTDOWN_MS = 4_000
 MAX_INTERLUDE_SWEEP_MS = 8_000
+SPECTRUM_CACHE_VERSION = 2
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
 LYRIC_MODES = {"original", "translation", "romanization"}
@@ -640,11 +641,17 @@ class SpectrumData:
         cache = project.directory / "spectrum_30fps.npz"
         if cache.exists() and cache.stat().st_mtime >= project.audio_path.stat().st_mtime:
             with np.load(cache) as value:
-                values = value["values"].astype(np.float32)
-                fps = int(value["fps"])
-            return cls(values, fps)
+                if "version" in value.files and int(value["version"]) == SPECTRUM_CACHE_VERSION:
+                    values = value["values"].astype(np.float32)
+                    fps = int(value["fps"])
+                    return cls(values, fps)
         values = _analyze_spectrum(project.audio_path, project.duration_ms, ffmpeg_executable)
-        np.savez_compressed(cache, values=values.astype(np.float16), fps=FPS)
+        np.savez_compressed(
+            cache,
+            values=values.astype(np.float16),
+            fps=FPS,
+            version=SPECTRUM_CACHE_VERSION,
+        )
         return cls(values)
 
 
@@ -857,8 +864,12 @@ def _analyze_spectrum(
     window_size = 2048
     window = np.hanning(window_size).astype(np.float32)
     frequencies = np.fft.rfftfreq(window_size, 1 / sample_rate)
-    edges = np.geomspace(45, min(5200, sample_rate / 2), bars + 1)
-    band_indices = [np.where((frequencies >= edges[i]) & (frequencies < edges[i + 1]))[0] for i in range(bars)]
+    band_indices = _log_band_indices(
+        frequencies,
+        low_hz=45.0,
+        high_hz=min(5200.0, sample_rate / 2),
+        bars=bars,
+    )
     values = np.zeros((frame_count, bars), dtype=np.float32)
     half = window_size // 2
     padded = np.pad(samples, (half, half))
@@ -883,6 +894,41 @@ def _analyze_spectrum(
             values[index - 1] * 0.76 + values[index] * 0.24,
         )
     return values.astype(np.float32)
+
+
+def _log_band_indices(
+    frequencies: np.ndarray, *, low_hz: float, high_hz: float, bars: int
+) -> list[np.ndarray]:
+    """Map logarithmic frequency bands onto non-empty FFT-bin ranges.
+
+    Logarithmic edges do not generally land on FFT bins.  At low frequencies
+    several adjacent edges can therefore round to the same bin, producing an
+    empty band whose value would otherwise stay zero forever.  The boundaries
+    below are snapped to the real FFT grid and made strictly increasing while
+    preserving the requested low/high limits as closely as possible.
+    """
+    if bars <= 0:
+        return []
+    if frequencies.ndim != 1 or not len(frequencies):
+        return [np.array([], dtype=np.intp) for _ in range(bars)]
+    low_hz = max(float(frequencies[0]), float(low_hz))
+    high_hz = min(float(frequencies[-1]), float(high_hz))
+    if high_hz <= low_hz:
+        return [np.array([], dtype=np.intp) for _ in range(bars)]
+
+    edges = np.geomspace(low_hz, high_hz, bars + 1)
+    boundaries = np.searchsorted(frequencies, edges, side="left").astype(np.intp)
+    boundaries[0] = max(0, min(int(boundaries[0]), len(frequencies) - bars))
+    boundaries[-1] = min(len(frequencies), max(int(boundaries[-1]), boundaries[0] + bars))
+
+    # Keep enough bins for the remaining bands while forcing every interval
+    # to contain at least one actual FFT bin.
+    for index in range(1, len(boundaries)):
+        minimum = int(boundaries[index - 1]) + 1
+        maximum = len(frequencies) - (len(boundaries) - 1 - index)
+        boundaries[index] = max(minimum, min(int(boundaries[index]), maximum))
+
+    return [np.arange(boundaries[index], boundaries[index + 1], dtype=np.intp) for index in range(bars)]
 
 
 def _cover_accent(image: Image.Image) -> tuple[int, int, int]:

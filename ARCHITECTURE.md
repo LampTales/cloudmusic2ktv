@@ -259,9 +259,9 @@ cloudmusic2ktv/
 
 ### 频谱
 
-`SpectrumData.load_or_create()` 使用 FFmpeg 将音频解码为 11025 Hz 单声道 float PCM，然后用 NumPy FFT 计算 64 个对数频带、30 FPS 的频谱数据。
+`SpectrumData.load_or_create()` 使用 FFmpeg 将音频解码为 11025 Hz 单声道 float PCM，然后用 NumPy FFT 计算 64 个对数频带、30 FPS 的频谱数据。对数边界会映射到实际 FFT bin，并保证每个频带至少包含一个 bin，避免低频段出现恒为零的空频带。
 
-缓存写入当前歌曲目录的 `spectrum_30fps.npz`。只要缓存时间不早于音频文件，就会复用。保存值为 float16，加载后转回 float32。
+缓存写入当前歌曲目录的 `spectrum_30fps.npz`，包含分频算法版本标记；只有缓存时间不早于音频文件且版本匹配时才会复用。保存值为 float16，加载后转回 float32。分频算法升级后旧缓存会自动重新分析。
 
 ### 编码
 
