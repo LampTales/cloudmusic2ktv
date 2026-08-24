@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -11,7 +12,7 @@ from flask import Flask, jsonify, render_template, request, send_file, url_for
 from werkzeug.exceptions import HTTPException
 
 from cloudmusic2ktv import NeteaseClient, NeteaseError, SongDownloadService
-from cloudmusic2ktv.service import local_song_status, parse_song_id
+from cloudmusic2ktv.service import local_song_status, parse_song_id, safe_filename
 from cloudmusic2ktv.sessions import FileSessionStore
 from cloudmusic2ktv.video import (
     VideoError,
@@ -236,7 +237,7 @@ def video_artifact(song_id: int, filename: str) -> Any:
         path,
         conditional=True,
         as_attachment=request.args.get("download") == "1",
-        download_name=filename,
+        download_name=video_download_name(song_id, filename),
     )
 
 
@@ -344,6 +345,7 @@ def local_video_files(song_id: int) -> list[dict[str, Any]]:
         videos.append(
             {
                 "filename": path.name,
+                "download_name": video_download_name(song_id, path.name),
                 "resolution": match.group(1),
                 "size": stat.st_size,
                 "updated_at": int(stat.st_mtime),
@@ -365,6 +367,27 @@ def local_artifact_path(song_id: int, filename: str) -> Path | None:
         return None
     candidate = directory / filename
     return candidate if safe_output_file(directory, candidate) else None
+
+
+def video_download_name(song_id: int, filename: str) -> str:
+    """Return a user-facing attachment name without the internal option hash."""
+    match = VIDEO_FILE.fullmatch(filename)
+    if match is None:
+        return filename
+
+    directory = song_output_directory(song_id)
+    if directory is None:
+        return filename
+    try:
+        metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+        artist = str(metadata.get("artist") or "").strip()
+        title = str(metadata.get("name") or "").strip()
+    except (OSError, ValueError, TypeError):
+        return filename
+    if not artist or not title:
+        return filename
+    stem = safe_filename(f"ktv_{match.group(1)}_{artist}_{title}", fallback=f"ktv_{match.group(1)}")
+    return f"{stem}.mp4"
 
 
 def song_output_directory(song_id: int) -> Path | None:
@@ -427,6 +450,6 @@ def error_response(message: str, code: Any, status_code: int) -> tuple[Any, int]
 
 
 if __name__ == "__main__":
-    host = os.environ.get("CLOUDMUSIC2KTV_HOST", "127.0.0.1")
+    host = os.environ.get("CLOUDMUSIC2KTV_HOST", "0.0.0.0")
     port = int(os.environ.get("CLOUDMUSIC2KTV_PORT", "7860"))
     app.run(host=host, port=port, debug=False, threaded=True)

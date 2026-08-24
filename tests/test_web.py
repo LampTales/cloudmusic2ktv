@@ -41,6 +41,7 @@ def test_local_video_status_lists_only_shareable_generated_mp4(monkeypatch, tmp_
     assert local["ready"] is True
     assert len(local["videos"]) == 1
     assert local["videos"][0]["filename"] == video.name
+    assert local["videos"][0]["download_name"] == video.name
     assert local["videos"][0]["resolution"] == "720p"
     assert local["videos"][0]["size"] == len(b"generated-video")
     assert local["videos"][0]["url"].startswith(
@@ -74,6 +75,9 @@ def test_video_artifact_can_be_downloaded_as_an_attachment(monkeypatch, tmp_path
     directory.mkdir()
     video = directory / "ktv_720p_012345abcdef.mp4"
     video.write_bytes(b"generated-video")
+    (directory / "metadata.json").write_text(
+        '{"id": 123, "name": "测试歌曲", "artist": "测试歌手"}', encoding="utf-8"
+    )
 
     response = web_app.app.test_client().get(
         f"/api/video/artifact/123/{video.name}?download=1"
@@ -81,9 +85,10 @@ def test_video_artifact_can_be_downloaded_as_an_attachment(monkeypatch, tmp_path
 
     assert response.status_code == 200
     assert response.data == b"generated-video"
-    assert response.headers["Content-Disposition"] == (
-        'attachment; filename=ktv_720p_012345abcdef.mp4'
-    )
+    disposition = response.headers["Content-Disposition"]
+    assert disposition.startswith("attachment; filename=ktv_720p__")
+    assert "filename*=UTF-8''ktv_720p_%E6%B5%8B%E8%AF%95%E6%AD%8C%E6%89%8B_" in disposition
+    assert disposition.endswith("%E6%AD%8C%E6%9B%B2.mp4")
 
 
 def test_local_video_status_is_missing_when_song_has_no_generated_video(monkeypatch, tmp_path):

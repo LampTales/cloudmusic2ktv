@@ -299,7 +299,7 @@ function downloadCastVideo() {
   url.searchParams.set("download", "1");
   const link = document.createElement("a");
   link.href = url.href;
-  link.download = video.filename;
+  link.download = video.download_name || video.filename;
   document.body.append(link);
   link.click();
   link.remove();

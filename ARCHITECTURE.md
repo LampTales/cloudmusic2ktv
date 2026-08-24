@@ -85,7 +85,7 @@ cloudmusic2ktv/
 
 `NeteaseClient` 和 `SongDownloadService` 不再全局共享，而是根据当前浏览器会话为每次请求创建。歌曲素材、下载互斥状态和视频队列仍是全局共享状态。
 
-默认监听 `127.0.0.1:7860`，可用 `CLOUDMUSIC2KTV_HOST` 和 `CLOUDMUSIC2KTV_PORT` 覆盖。Flask 以 `threaded=True` 启动，但视频编码器自己的执行池只有一个 worker。长期公网部署时由外层反向代理终止 HTTPS，项目本身保持 HTTP。
+默认监听 `0.0.0.0:7860`，可用 `CLOUDMUSIC2KTV_HOST` 和 `CLOUDMUSIC2KTV_PORT` 覆盖；只允许本机访问时将 `CLOUDMUSIC2KTV_HOST` 设为 `127.0.0.1`。Flask 以 `threaded=True` 启动，但视频编码器自己的执行池只有一个 worker。长期公网部署时由外层反向代理终止 HTTPS，项目本身保持 HTTP。
 
 ### API 一览
 
@@ -106,9 +106,9 @@ cloudmusic2ktv/
 | `GET /api/video/queue` | 匿名查询当前任务、等待数量和最近结果 | 无 |
 | `GET /api/video/local/<song_id>` | 匿名扫描当前歌曲可投屏的本地 MP4 | song ID |
 | `GET /api/video/jobs/<job_id>` | 轮询任务状态 | job ID |
-| `GET /api/video/artifact/<song_id>/<filename>` | 返回预览或视频；`download=1` 时作为附件下载 | 受文件名白名单限制 |
+| `GET /api/video/artifact/<song_id>/<filename>` | 返回预览或视频；`download=1` 时作为附件下载并使用歌曲名/作者命名 | 受文件名白名单限制 |
 
-自定义背景上传上限由 Flask 的 `MAX_CONTENT_LENGTH = 32 * 1024 * 1024` 限制为 32 MiB。视频 artifact 路由只允许旧版固定文件名或符合 `video_preview_<12位哈希>.png`、`ktv_<分辨率>_<12位哈希>.mp4` 的文件名，并支持 HEAD 与 HTTP Range。artifact 查找不依赖源素材仍然完整存在，但会拒绝输出目录之外的解析路径。
+自定义背景上传上限由 Flask 的 `MAX_CONTENT_LENGTH = 32 * 1024 * 1024` 限制为 32 MiB。视频 artifact 路由只允许旧版固定文件名或符合 `video_preview_<12位哈希>.png`、`ktv_<分辨率>_<12位哈希>.mp4` 的文件名，并支持 HEAD 与 HTTP Range。artifact 查找不依赖源素材仍然完整存在，但会拒绝输出目录之外的解析路径。下载附件时，后端根据 `metadata.json` 将视频命名为 `ktv_<分辨率>_<作者>_<歌曲名>.mp4`；服务器内部文件仍保留选项哈希，以区分不同配置。
 
 异常约定：
 
@@ -353,6 +353,8 @@ outputs/<歌曲ID>_<歌手>_<歌名>/
 | `video_preview_<hash>.png` | 按视频选项哈希区分 |
 | `ktv_<resolution>_<hash>.mp4` | 按视频选项哈希区分，避免不同配置互相覆盖 |
 
+用户通过“下载视频到本地”取得的附件不使用上述内部哈希文件名，而是使用 `ktv_<分辨率>_<作者>_<歌曲名>.mp4`；如果缺少有效 metadata，则回退为服务器文件名。
+
 由于 `VideoProject.load()` 当前取第一个 `audio.*`/`cover.*`，扩展名变化后残留多个文件可能导致选中旧文件。精细调整阶段建议优先引入 manifest 或在安全确认目标目录后清理同类旧文件。
 
 ## 10. 测试覆盖
@@ -393,5 +395,5 @@ node --check static\app.js
 - 不要用未登录方案绕过付费或播放权限；只使用当前账号依法拥有的播放权益；
 - 下载仍应使用 `.part` 临时文件和成功后替换，避免中断留下伪完整文件；
 - 视频任务运行时不要重启服务；
-- WebUI 默认保持仅监听 `127.0.0.1`，避免将登录入口和本地文件服务暴露到局域网；
+- WebUI 默认监听 `0.0.0.0` 以支持局域网设备；不要将开发服务器直接暴露到公网，需要本机模式时显式设置 `CLOUDMUSIC2KTV_HOST=127.0.0.1`；
 - 新增可下载文件时同步更新 artifact 路由白名单，避免任意路径读取。
