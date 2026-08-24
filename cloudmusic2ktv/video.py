@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import colorsys
+import hashlib
 import json
 import math
 import re
 import subprocess
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -777,32 +779,92 @@ class VideoJobManager:
         self.jobs: dict[str, dict[str, Any]] = {}
         self.lock = threading.Lock()
 
-    def start(self, song_id: int, options: VideoOptions) -> dict[str, Any]:
-        job_id = uuid.uuid4().hex
-        job = {
-            "id": job_id,
-            "song_id": song_id,
-            "status": "queued",
-            "progress": 0,
-            "message": "等待渲染",
-            "result": None,
-            "error": None,
-        }
+    def start(
+        self, song_id: int, options: VideoOptions, song: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        fingerprint = video_options_fingerprint(options)
+        task_key = f"{song_id}:{fingerprint}"
         with self.lock:
+            for existing in self.jobs.values():
+                if existing.get("task_key") == task_key and existing["status"] in {"queued", "running"}:
+                    result = self._public_job(existing)
+                    result["deduplicated"] = True
+                    result["position"] = self._position_locked(existing["id"])
+                    return result
+            job_id = uuid.uuid4().hex
+            job = {
+                "id": job_id,
+                "song_id": song_id,
+                "song": {
+                    "name": str((song or {}).get("name") or ""),
+                    "artist": str((song or {}).get("artist") or ""),
+                    "cover_url": str((song or {}).get("cover_url") or ""),
+                },
+                "resolution": options.resolution,
+                "task_key": task_key,
+                "fingerprint": fingerprint,
+                "status": "queued",
+                "progress": 0,
+                "message": "等待渲染",
+                "result": None,
+                "error": None,
+                "created_at": int(time.time()),
+                "started_at": None,
+                "finished_at": None,
+            }
             self.jobs[job_id] = job
         self.executor.submit(self._run, job_id, song_id, options)
-        return dict(job)
+        with self.lock:
+            result = self._public_job(self.jobs[job_id])
+            result["deduplicated"] = False
+            result["position"] = self._position_locked(job_id)
+            return result
 
     def get(self, job_id: str) -> dict[str, Any] | None:
         with self.lock:
             job = self.jobs.get(job_id)
-            return dict(job) if job else None
+            return self._public_job(job) if job else None
+
+    def queue_status(self) -> dict[str, Any]:
+        with self.lock:
+            active = [
+                job for job in self.jobs.values() if job["status"] in {"queued", "running"}
+            ]
+            running = next((job for job in active if job["status"] == "running"), None)
+            current = running or (active[0] if active else None)
+            waiting_jobs = [job for job in active if job is not current]
+            queued = []
+            for position, job in enumerate(waiting_jobs, start=1):
+                item = self._public_job(job)
+                item["position"] = position
+                queued.append(item)
+            recent = next(
+                (
+                    job
+                    for job in reversed(list(self.jobs.values()))
+                    if job["status"] in {"done", "error"}
+                ),
+                None,
+            )
+            return {
+                "current": self._public_job(current) if current else None,
+                "queued_count": len(waiting_jobs),
+                "queued": queued,
+                "recent": self._public_job(recent) if recent else None,
+            }
 
     def _run(self, job_id: str, song_id: int, options: VideoOptions) -> None:
         try:
-            self._update(job_id, status="running", message="分析音频与准备画面", progress=1)
+            self._update(
+                job_id,
+                status="running",
+                message="分析音频与准备画面",
+                progress=1,
+                started_at=int(time.time()),
+            )
             project = VideoProject.load(self.output_root, song_id)
-            destination = project.directory / f"ktv_{options.resolution}.mp4"
+            fingerprint = video_options_fingerprint(options)
+            destination = project.directory / f"ktv_{options.resolution}_{fingerprint}.mp4"
 
             def on_progress(done: int, total: int) -> None:
                 percent = min(99, max(2, round(done / total * 100)))
@@ -810,14 +872,48 @@ class VideoJobManager:
 
             result = render_video(project, options, destination, on_progress)
             self._update(
-                job_id, status="done", progress=100, message="视频生成完成", result=result
+                job_id,
+                status="done",
+                progress=100,
+                message="视频生成完成",
+                result=result,
+                finished_at=int(time.time()),
             )
         except Exception as exc:
-            self._update(job_id, status="error", message="生成失败", error=str(exc))
+            self._update(
+                job_id,
+                status="error",
+                message="生成失败",
+                error=str(exc),
+                finished_at=int(time.time()),
+            )
 
     def _update(self, job_id: str, **values: Any) -> None:
         with self.lock:
             self.jobs[job_id].update(values)
+
+    def _position_locked(self, job_id: str) -> int:
+        position = 0
+        for job in self.jobs.values():
+            if job["status"] not in {"queued", "running"}:
+                continue
+            if job["id"] == job_id:
+                return position
+            position += 1
+        return 0
+
+    @staticmethod
+    def _public_job(job: dict[str, Any] | None) -> dict[str, Any] | None:
+        if job is None:
+            return None
+        return {key: value for key, value in job.items() if key != "task_key"}
+
+
+def video_options_fingerprint(options: VideoOptions) -> str:
+    encoded = json.dumps(
+        options.to_dict(), ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()[:12]
 
 
 def get_ffmpeg_executable() -> str:

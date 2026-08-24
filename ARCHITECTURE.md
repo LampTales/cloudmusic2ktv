@@ -55,6 +55,7 @@ cloudmusic2ktv/
 ├─ cloudmusic2ktv/
 │  ├─ __init__.py                对外导出客户端、异常和下载服务
 │  ├─ netease.py                 网易云 HTTP 会话、weapi 加密、Cookie
+│  ├─ sessions.py                按浏览器隔离的文件会话、过期与清理
 │  ├─ service.py                 歌曲 ID 解析、素材下载、文件校验与落盘
 │  ├─ lyrics.py                  LRC 解析和统一时间轴合并
 │  └─ video.py                   视频选项、素材装载、逐帧渲染、频谱、任务队列
@@ -69,7 +70,7 @@ cloudmusic2ktv/
 │  ├─ test_service.py            ID/链接解析和安全文件名
 │  ├─ test_video.py              视频选项、间奏、预览与后台任务
 │  └─ test_web.py                Flask 错误路由行为
-├─ instance/                     运行时 Cookie；不应公开或提交
+├─ instance/sessions/            按浏览器隔离的运行时 Cookie；不应公开或提交
 └─ outputs/                      下载素材、缓存、预览和视频；用户数据
 ```
 
@@ -77,11 +78,12 @@ cloudmusic2ktv/
 
 ## 4. 顶层 Web 应用
 
-`app.py` 在模块导入时创建三个单例：
+`app.py` 在模块导入时创建两个主要单例：
 
-- `client = NeteaseClient(...)`：共享 `requests.Session` 和网易云 Cookie；
-- `downloads = SongDownloadService(...)`：将素材写到 `outputs/`；
+- `auth_sessions = FileSessionStore(...)`：用浏览器随机 Cookie 映射服务器本地身份文件；
 - `video_jobs = VideoJobManager(...)`：进程内视频任务管理器。
+
+`NeteaseClient` 和 `SongDownloadService` 不再全局共享，而是根据当前浏览器会话为每次请求创建。歌曲素材、下载互斥状态和视频队列仍是全局共享状态。
 
 默认监听 `127.0.0.1:7860`，可用 `CLOUDMUSIC2KTV_HOST` 和 `CLOUDMUSIC2KTV_PORT` 覆盖。Flask 以 `threaded=True` 启动，但视频编码器自己的执行池只有一个 worker。
 
@@ -96,14 +98,17 @@ cloudmusic2ktv/
 | `POST /api/auth/logout` | 退出并删除本地 Cookie | 无 |
 | `GET /api/search?q=...` | 搜索歌曲，最多 12 条 | 查询字符串 |
 | `POST /api/song/inspect` | 按 ID/链接读取歌曲信息 | `song` |
+| `GET /api/song/local/<song_id>` | 查询共享素材状态 | song ID |
 | `POST /api/song/download` | 下载并校验全部素材 | `song`, `level` |
 | `POST /api/video/preview` | 生成静态预览 | `song`, `options` |
 | `POST /api/video/background` | 保存当前歌曲自定义背景 | multipart `song`, `background` |
 | `POST /api/video/render` | 创建后台视频任务 | `song`, `options` |
+| `GET /api/video/queue` | 匿名查询当前任务、等待数量和最近结果 | 无 |
+| `GET /api/video/local/<song_id>` | 匿名扫描当前歌曲可投屏的本地 MP4 | song ID |
 | `GET /api/video/jobs/<job_id>` | 轮询任务状态 | job ID |
 | `GET /api/video/artifact/<song_id>/<filename>` | 返回预览或视频 | 受文件名白名单限制 |
 
-自定义背景上传上限由 Flask 的 `MAX_CONTENT_LENGTH = 32 * 1024 * 1024` 限制为 32 MiB。视频 artifact 路由只允许 `video_preview.png`、`ktv_1080p.mp4`、`ktv_720p.mp4`。
+自定义背景上传上限由 Flask 的 `MAX_CONTENT_LENGTH = 32 * 1024 * 1024` 限制为 32 MiB。视频 artifact 路由只允许旧版固定文件名或符合 `video_preview_<12位哈希>.png`、`ktv_<分辨率>_<12位哈希>.mp4` 的文件名，并支持 HEAD 与 HTTP Range。artifact 查找不依赖源素材仍然完整存在，但会拒绝输出目录之外的解析路径。
 
 异常约定：
 
@@ -118,13 +123,17 @@ cloudmusic2ktv/
 
 ### 会话与登录
 
-- 使用一个长生命周期 `requests.Session`；
+- 每个浏览器通过 `HttpOnly`、`SameSite=Lax` 的随机会话 Cookie 标识；
+- 真正的网易云 Cookie 保存在 `instance/sessions/<会话ID SHA-256>.json`；
+- 身份文件包含创建时间、最后使用时间、最小账号摘要和网易云 Cookie，不包含浏览器识别码明文；
+- 身份使用时进行单文件惰性过期检查，默认 90 天；服务启动和成功登录后遍历清理过期文件；
+- 登录成功后轮换浏览器识别码，退出只删除当前浏览器的身份文件；
+- 同一浏览器的网易云请求使用进程内锁串行化，身份文件用 `.part` 原子替换；
 - User-Agent、Referer、Origin 模拟网易云网页播放器；
+- `requests.Session.trust_env` 默认关闭，避免继承启动环境中的无效 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`；确需环境代理时可显式构造 `NeteaseClient(trust_env_proxy=True)`；
 - 手机验证码发送使用 `/api/sms/captcha/sent`；
 - 登录使用 `/weapi/login/cellphone`；
-- Cookie 只持久化到 `instance/netease_cookies.json`；
-- Cookie 文件解析失败时会清空内存会话，但不会阻止 UI 启动；
-- 登出无论远端请求是否成功，都会清空内存 Cookie 并删除本地 Cookie 文件。
+- 浏览器没有有效会话时仍可搜索、读取公开歌曲并使用共享素材。
 
 ### 歌曲接口
 
@@ -283,6 +292,8 @@ cloudmusic2ktv/
 {
   "id": "uuidhex",
   "song_id": 123,
+  "song": {"name": "歌曲名", "artist": "歌手", "cover_url": "..."},
+  "resolution": "720p",
   "status": "queued | running | done | error",
   "progress": 0,
   "message": "...",
@@ -291,6 +302,8 @@ cloudmusic2ktv/
 }
 ```
 
+任务不保存提交者身份；`POST /api/video/render` 只在提交瞬间检查当前浏览器已登录。相同歌曲和完全相同选项的活动任务会去重。`GET /api/video/queue` 匿名返回当前任务、等待数量和最近完成/失败结果，不需要发送登录 Cookie。
+
 后端重启会丢失全部任务状态，并终止正在运行的 FFmpeg/渲染过程。不要在视频生成期间重启服务。
 
 ### static/app.js
@@ -298,19 +311,26 @@ cloudmusic2ktv/
 前端没有框架，核心状态为：
 
 - `selectedSong`：02 区最后一次成功读取/点击的歌曲；
+- `selectedSongLocal`：当前歌曲共享素材的 `missing/partial/downloading/ready/error` 状态；
+- `accountLoggedIn`：当前浏览器自己的网易云登录状态；
 - `cloudmusic2ktv.selectedSongId`：localStorage 中用于刷新后恢复选歌的 ID；
 - `previewRequest`：丢弃过期预览响应，避免较慢响应覆盖较新设置；
-- `renderJobActive` / `renderTaskSong`：显示当前生成任务锁定的歌曲。
+- `queueTimer`：匿名轮询全局视频队列。
+- `selectedSongVideos`：03 区为当前歌曲从本地扫描到的可投屏 MP4；不依赖登录或素材完整状态；
+- `videoStatusRequest`：丢弃切歌后才返回的过期本地视频查询。
 
 选歌规则是重要产品约束：
 
 1. 只修改 ID 输入框不会修改 `selectedSong`；
 2. “读取”成功或点击搜索结果才会调用 `showSong()`；
-3. `showSong()` 同步 02/03 区、保存 ID、隐藏旧结果并请求新预览；
-4. 点击“生成完整视频”时复制并冻结当时的歌曲和选项；
-5. 生成期间再次选歌只改变下一次任务，不改变已经提交的任务。
+3. 搜索结果列表不依赖搜索接口中的封面字段；点击结果后按歌曲 ID 调用 inspect，重新取得完整详情和下载区封面；
+4. `showSong()` 同步 02/03 区、保存 ID、隐藏旧结果并查询共享素材；
+5. 本地已有完整 metadata、歌词、音频和封面时直接开放预览，不依赖登录或网易云网络；
+6. 视频提交按钮只有在素材完整且当前浏览器已登录时可用；提交成功后立即恢复，不跟踪“我的任务”。
 
-任务 ID 目前只存在于页面 JavaScript 内存中，没有保存到 localStorage。刷新页面后后台任务仍可能继续，但 WebUI 无法恢复对该任务的轮询。这是一个明确的后续改进点。
+前端不保存任务 ID，也不建立“我的任务”关系。刷新页面后通过全局队列接口恢复当前任务和进度视图；“等待 n”按钮打开的浮窗直接展示全局当前任务与完整等待列表。
+
+03 区的“使用投屏应用打开”优先使用 Web Share API 分享基于当前页面 origin 的视频 URL，因此局域网访问和未来公网反向代理无需分别配置媒体主机名。非安全上下文（典型为 `http://192.168.x.x`）无法使用 Web Share 时退化为复制 URL，供 BubbleUPnP 手动打开。DLNA 接收端只读取匿名视频 artifact，不接触网易云 Cookie。
 
 ## 9. 输出目录与覆盖行为
 
@@ -328,8 +348,8 @@ outputs/<歌曲ID>_<歌手>_<歌名>/
 | `audio.<ext>`、`cover.<ext>` | 相同扩展名覆盖；扩展名变化时旧文件可能保留 |
 | `custom_background.png` | 再次上传时覆盖 |
 | `spectrum_30fps.npz` | 音频更新后重新生成 |
-| `video_preview.png` | 每次预览覆盖 |
-| `ktv_1080p.mp4`、`ktv_720p.mp4` | 同分辨率再次生成时覆盖 |
+| `video_preview_<hash>.png` | 按视频选项哈希区分 |
+| `ktv_<resolution>_<hash>.mp4` | 按视频选项哈希区分，避免不同配置互相覆盖 |
 
 由于 `VideoProject.load()` 当前取第一个 `audio.*`/`cover.*`，扩展名变化后残留多个文件可能导致选中旧文件。精细调整阶段建议优先引入 manifest 或在安全确认目标目录后清理同类旧文件。
 
@@ -340,6 +360,7 @@ outputs/<歌曲ID>_<歌手>_<歌名>/
 - `test_crypto.py`：固定密钥下 weapi 输出字段、RSA 长度、AES block；
 - `test_lyrics.py`：LRC 小数位、多时间戳、翻译/罗马音合并；
 - `test_service.py`：歌曲 ID/链接解析、Windows 非法文件名替换；
+- `test_sessions.py`：文件会话保存、恢复、惰性过期和清理；
 - `test_video.py`：选项校验、开场预卷、间奏状态、预览尺寸、歌词过滤、后台任务完成；
 - `test_web.py`：未知路由保持 404。
 
@@ -350,22 +371,22 @@ outputs/<歌曲ID>_<歌手>_<歌名>/
 node --check static\app.js
 ```
 
-涉及 UI 时还应启动本地服务并实际验证：读取歌曲、03 区目标同步、刷新恢复选歌、预览更新。涉及视频布局时，至少生成静态预览；涉及音视频同步、频谱或 FFmpeg 参数时，应生成一段受限时长测试视频或一首完整测试视频。
+涉及 UI 时还应启动本地服务并实际验证：读取歌曲、03 区本地视频同步、04 区目标同步、刷新恢复选歌、预览更新。涉及视频布局时，至少生成静态预览；涉及音视频同步、频谱或 FFmpeg 参数时，应生成一段受限时长测试视频或一首完整测试视频。
 
 ## 11. 已知限制与优先改进点
 
 1. 网易云内部接口可能变化，错误诊断优先查看终端日志、`lyrics_raw.json` 和 `metadata.json`。
 2. 歌词扫色以逐行时间轴匀速估算，不是真正逐字同步；原始 `klyric` 已保留，但尚未解析成逐字模型。
 3. 视频渲染为 CPU 密集型 Python 逐帧流程，1080p 完整歌曲较慢。
-4. 任务仅在内存中，刷新无法恢复轮询，后端重启无法恢复任务。
-5. 任务执行池只有一个 worker，没有取消、暂停和队列管理 UI。
+4. 任务仅在内存中；页面刷新可恢复全局视图，但后端重启无法恢复任务。
+5. 任务执行池只有一个 worker，没有取消、暂停或持久化恢复。
 6. 字体搜索只支持当前 Windows 路径。
 7. 同歌多版本/不同音频扩展名缺少 manifest，可能选到残留旧文件。
 8. 前端是单文件原生 JavaScript，继续增加复杂状态前可考虑拆分模块，但应保留当前清晰的选歌/任务锁定语义。
 
 ## 12. 修改时必须保留的安全边界
 
-- 不要把 `instance/netease_cookies.json` 输出到日志、测试结果或对话；
+- 不要把 `instance/sessions/` 中的文件或浏览器会话 Cookie 输出到日志、测试结果或对话；
 - 不要删除或覆盖 `outputs/` 中用户文件，除非目标和授权非常明确；
 - 不要用未登录方案绕过付费或播放权限；只使用当前账号依法拥有的播放权益；
 - 下载仍应使用 `.part` 临时文件和成功后替换，避免中断留下伪完整文件；

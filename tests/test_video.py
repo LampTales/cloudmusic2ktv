@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import threading
 import time
 
 import pytest
@@ -195,3 +196,43 @@ def test_background_job_reports_completion(monkeypatch, tmp_path):
     manager.executor.shutdown(wait=True)
     assert finished["status"] == "done"
     assert finished["progress"] == 100
+
+
+def test_queue_deduplicates_active_options_and_reports_waiting_count(monkeypatch, tmp_path):
+    project = make_project(tmp_path / "project")
+    monkeypatch.setattr(VideoProject, "load", classmethod(lambda cls, root, song_id: project))
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_render(project, options, destination, progress):
+        started.set()
+        assert release.wait(2)
+        destination.write_bytes(b"video")
+        return {
+            "path": str(destination),
+            "size": 5,
+            "duration_ms": 1000,
+            "frames": 30,
+            "resolution": options.resolution,
+            "pre_roll_ms": 0,
+        }
+
+    monkeypatch.setattr(video_module, "render_video", blocking_render)
+    manager = VideoJobManager(tmp_path)
+    first = manager.start(1, VideoOptions(spectrum=False), project.song)
+    assert started.wait(1)
+    duplicate = manager.start(1, VideoOptions(spectrum=False), project.song)
+    waiting = manager.start(
+        1, VideoOptions(spectrum=False, resolution="720p"), project.song
+    )
+    assert duplicate["id"] == first["id"]
+    assert duplicate["deduplicated"] is True
+    assert waiting["position"] == 1
+    queue = manager.queue_status()
+    assert queue["queued_count"] == 1
+    assert queue["queued"][0]["id"] == waiting["id"]
+    assert queue["queued"][0]["position"] == 1
+    assert queue["queued"][0]["song"]["name"] == project.song["name"]
+    assert queue["queued"][0]["resolution"] == "720p"
+    release.set()
+    manager.executor.shutdown(wait=True)

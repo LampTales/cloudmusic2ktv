@@ -35,10 +35,20 @@ class NeteaseError(RuntimeError):
 class NeteaseClient:
     """Small, local-only client for the endpoints used by the NetEase web player."""
 
-    def __init__(self, cookie_file: Path | None = None, timeout: int = 25):
+    def __init__(
+        self,
+        cookie_file: Path | None = None,
+        timeout: int = 25,
+        *,
+        trust_env_proxy: bool = False,
+    ):
         self.timeout = timeout
         self.cookie_file = cookie_file
         self.session = requests.Session()
+        # Local launchers and sandboxed shells may inject placeholder proxy
+        # variables such as 127.0.0.1:9. NetEase requests should be direct by
+        # default instead of silently inheriting an unusable process proxy.
+        self.session.trust_env = trust_env_proxy
         self.session.headers.update(
             {
                 "User-Agent": (
@@ -219,13 +229,7 @@ class NeteaseClient:
             return
         try:
             cookies = json.loads(self.cookie_file.read_text(encoding="utf-8"))
-            for item in cookies:
-                self.session.cookies.set(
-                    item["name"],
-                    item["value"],
-                    domain=item.get("domain") or ".music.163.com",
-                    path=item.get("path") or "/",
-                )
+            self.load_cookies(cookies)
         except (OSError, ValueError, KeyError, TypeError):
             # A corrupt local session should not prevent the UI from starting.
             self.session.cookies.clear()
@@ -234,7 +238,13 @@ class NeteaseClient:
         if not self.cookie_file:
             return
         self.cookie_file.parent.mkdir(parents=True, exist_ok=True)
-        data = [
+        self.cookie_file.write_text(
+            json.dumps(self.export_cookies(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    def export_cookies(self) -> list[dict[str, str]]:
+        """Return the NetEase cookie jar in a JSON-serializable form."""
+        return [
             {
                 "name": cookie.name,
                 "value": cookie.value,
@@ -244,9 +254,17 @@ class NeteaseClient:
             for cookie in self.session.cookies
             if cookie.domain.endswith("music.163.com") or not cookie.domain
         ]
-        self.cookie_file.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+
+    def load_cookies(self, cookies: list[dict[str, Any]]) -> None:
+        """Replace the current cookie jar with serialized NetEase cookies."""
+        self.session.cookies.clear()
+        for item in cookies:
+            self.session.cookies.set(
+                item["name"],
+                item["value"],
+                domain=item.get("domain") or ".music.163.com",
+                path=item.get("path") or "/",
+            )
 
 
 def weapi_payload(payload: dict[str, Any], secret_key: str | None = None) -> dict[str, str]:
@@ -287,4 +305,3 @@ def normalize_song(song: dict[str, Any]) -> dict[str, Any]:
         "copyright": song.get("copyright"),
         "source": song,
     }
-

@@ -17,6 +17,17 @@ SONG_ID_PATTERNS = (
     re.compile(r"(?:[?#&]|^)id=(\d+)(?:&|$)"),
     re.compile(r"/song/(\d+)(?:[/?#]|$)"),
 )
+PUBLIC_SONG_FIELDS = (
+    "id",
+    "name",
+    "artists",
+    "artist",
+    "album",
+    "cover_url",
+    "duration_ms",
+    "fee",
+    "copyright",
+)
 
 
 def parse_song_id(value: str | int) -> int:
@@ -41,8 +52,14 @@ class SongDownloadService:
         self.output_root = output_root
 
     def inspect(self, song_id: int) -> dict[str, Any]:
+        local = load_local_song(self.output_root, song_id)
+        if local is not None:
+            return local
         song = self.client.song_detail(song_id)
         return public_song(song)
+
+    def local_status(self, song_id: int, *, downloading: bool = False) -> dict[str, Any]:
+        return local_song_status(self.output_root, song_id, downloading=downloading)
 
     def download(self, song_id: int, level: str = "exhigh") -> dict[str, Any]:
         song = self.client.song_detail(song_id)
@@ -57,6 +74,7 @@ class SongDownloadService:
         cover_path = self._download_cover(song, directory)
         audio_path = self._download_audio(audio, directory)
         timeline = build_timeline(lyrics)
+        lyric_types = available_lyric_types(lyrics)
 
         self._write_json(directory / "metadata.json", {**public_song(song), "audio": audio})
         self._write_json(directory / "lyrics_raw.json", lyrics)
@@ -78,6 +96,7 @@ class SongDownloadService:
             "audio": str(audio_path.resolve()),
             "cover": str(cover_path.resolve()),
             "timeline_lines": len(timeline),
+            "lyric_types": lyric_types,
             "quality": audio.get("level"),
             "bitrate": audio.get("br"),
             "size": audio_path.stat().st_size,
@@ -139,7 +158,79 @@ class SongDownloadService:
 
 
 def public_song(song: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in song.items() if key != "source"}
+    return {key: song.get(key) for key in PUBLIC_SONG_FIELDS if key in song}
+
+
+def available_lyric_types(payload: dict[str, Any]) -> list[str]:
+    mappings = (
+        ("original", "lrc"),
+        ("translation", "tlyric"),
+        ("romanization", "romalrc"),
+        ("karaoke", "klyric"),
+    )
+    return [
+        name
+        for name, key in mappings
+        if str((payload.get(key) or {}).get("lyric") or "").strip()
+    ]
+
+
+def load_local_song(output_root: Path, song_id: int) -> dict[str, Any] | None:
+    status = local_song_status(output_root, song_id)
+    if not status["ready"]:
+        return None
+    directory = sorted(output_root.glob(f"{song_id}_*"))[0]
+    try:
+        value = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(value, dict) or int(value.get("id") or 0) != song_id:
+        return None
+    return public_song(value)
+
+
+def local_song_status(
+    output_root: Path, song_id: int, *, downloading: bool = False
+) -> dict[str, Any]:
+    if downloading:
+        return {
+            "status": "downloading",
+            "ready": False,
+            "message": "其他请求正在下载这首歌的共享素材",
+        }
+
+    directories = sorted(output_root.glob(f"{song_id}_*"))
+    if not directories:
+        return {
+            "status": "missing",
+            "ready": False,
+            "message": "本地还没有这首歌的素材",
+        }
+
+    directory = directories[0]
+    metadata = directory / "metadata.json"
+    timeline = directory / "lyrics_timeline.json"
+    audio = [path for path in directory.glob("audio.*") if not path.name.endswith(".part")]
+    cover = [path for path in directory.glob("cover.*") if not path.name.endswith(".part")]
+    ready = metadata.exists() and timeline.exists() and bool(audio) and bool(cover)
+    if ready:
+        updated_at = max(
+            metadata.stat().st_mtime,
+            timeline.stat().st_mtime,
+            audio[0].stat().st_mtime,
+            cover[0].stat().st_mtime,
+        )
+        return {
+            "status": "ready",
+            "ready": True,
+            "message": "共享素材已经可以使用",
+            "updated_at": int(updated_at),
+        }
+    return {
+        "status": "partial",
+        "ready": False,
+        "message": "检测到不完整的本地素材，请重新下载",
+    }
 
 
 def _file_md5(path: Path) -> str:
@@ -148,4 +239,3 @@ def _file_md5(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-

@@ -33,7 +33,7 @@
           <label for="captcha">短信验证码</label>
           <input id="captcha" placeholder="请输入验证码" inputmode="numeric" autocomplete="one-time-code">
           <button id="login" class="primary">登录账号</button>
-          <p class="fineprint">手机号与验证码不会写入磁盘；登录成功后只在 <code>instance/</code> 保存会话 Cookie。</p>
+          <p class="fineprint">手机号与验证码不会写入磁盘；登录后的网易云 Cookie 按当前浏览器隔离保存在服务器 <code>instance/sessions/</code>。</p>
         </div>
         <div id="loggedIn" class="hidden logged-in">
           <div class="avatar-wrap"><img id="avatar" alt="账号头像"></div>
@@ -68,6 +68,10 @@
         <p class="eyebrow">READY TO FETCH</p>
         <h2 id="songName"></h2>
         <p id="songMeta"></p>
+        <div id="materialStatus" class="material-status">
+          <span id="materialStatusDot" class="material-dot"></span>
+          <div><strong id="materialStatusTitle">正在检查共享素材</strong><p id="materialStatusMessage"></p></div>
+        </div>
         <div class="actions">
           <label class="quality-label">音质
             <select id="quality">
@@ -83,11 +87,34 @@
       </div>
     </section>
 
-    <section id="downloadResult" class="result card hidden"></section>
-
-    <section id="videoBuilder" class="video-builder card hidden">
-      <div class="card-title video-heading">
+    <section id="castPanel" class="cast-card card hidden">
+      <div class="card-title cast-heading">
         <span class="step">03</span>
+        <div><h2>投屏已有视频</h2><p>只检查服务器本地已经生成的 MP4 视频</p></div>
+      </div>
+      <div class="cast-song-target" aria-live="polite">
+        <img id="castSongCover" alt="当前投屏歌曲封面">
+        <div class="cast-song-copy">
+          <span class="target-label">当前歌曲</span>
+          <strong id="castSongTitle">尚未选择歌曲</strong>
+          <span id="castSongMeta">等待检查本地视频</span>
+        </div>
+        <span id="castSongState" class="target-state">正在检查</span>
+      </div>
+      <div id="castMissing" class="cast-missing">正在检查这首歌是否已有完整视频…</div>
+      <div id="castControls" class="cast-controls hidden">
+        <label for="castVideoSelect">选择本地视频
+          <select id="castVideoSelect"></select>
+        </label>
+        <button id="openCastApp" class="primary cast-button" type="button">使用投屏应用打开</button>
+        <a id="castDirectLink" class="cast-direct-link" target="_blank" rel="noopener">先测试播放</a>
+      </div>
+      <p id="castHelp" class="fineprint cast-help">点击后在系统分享菜单中选择 BubbleUPnP，再由应用选择局域网内的播放设备。</p>
+    </section>
+
+    <section id="videoBuilder" class="video-builder card">
+      <div class="card-title video-heading">
+        <span class="step">04</span>
         <div><h2>生成 KTV 视频</h2><p>设置改变后会使用同一套 Python 渲染器更新预览</p></div>
       </div>
       <div class="video-song-target" aria-live="polite">
@@ -99,7 +126,7 @@
         </div>
         <span id="videoSongState" class="target-state">等待选择</span>
       </div>
-      <p id="videoSongHint" class="selection-hint">03 区跟随 02 区最后一次成功读取的歌曲；仅修改输入框不会切换歌曲。</p>
+      <p id="videoSongHint" class="selection-hint">04 区跟随 02 区最后一次成功读取的歌曲；仅修改输入框不会切换歌曲。</p>
       <div class="builder-layout">
         <div class="video-options">
           <div class="option-grid">
@@ -159,26 +186,56 @@
         <div class="preview-panel">
           <div class="preview-stage">
             <img id="videoPreviewImage" alt="视频画面预览">
-            <div id="previewPlaceholder">正在准备实际歌曲预览…</div>
+            <div id="previewPlaceholder">请先选择歌曲并准备共享素材</div>
           </div>
           <div class="preview-actions">
             <span id="previewMeta">预览尚未生成</span>
-            <button id="refreshPreview" class="secondary compact">更新预览</button>
+            <button id="refreshPreview" class="secondary compact" disabled>更新预览</button>
           </div>
         </div>
       </div>
       <div class="render-row">
-        <button id="renderVideo" class="primary render-button">生成完整视频</button>
-        <div id="renderProgress" class="render-progress hidden">
-          <div id="renderTaskSong" class="render-task-song hidden"></div>
-          <div class="progress-track"><div id="progressFill"></div></div>
-          <div class="progress-copy"><span id="progressMessage">等待渲染</span><strong id="progressPercent">0%</strong></div>
+        <button id="renderVideo" class="primary render-button" disabled>加入生成队列</button>
+        <div class="render-submit-copy">
+          <strong id="renderAvailability">请选择歌曲并准备共享素材</strong>
+          <span>提交时需要登录；加入队列后任务不再绑定账号。</span>
         </div>
       </div>
-      <section id="videoResult" class="video-result hidden"></section>
+    </section>
+
+    <section id="queuePanel" class="queue-card card" aria-live="polite">
+      <div class="queue-heading">
+        <div class="card-title">
+          <span class="step">Q</span>
+          <div><h2>共享生成队列</h2><p>任务按提交顺序单线程生成，不记录提交者身份</p></div>
+        </div>
+        <button id="queueCount" class="queue-count" type="button" aria-haspopup="dialog">等待 0</button>
+      </div>
+      <div id="queueIdle" class="queue-idle">当前没有视频生成任务</div>
+      <div id="queueCurrent" class="queue-current hidden">
+        <img id="queueCover" alt="当前任务歌曲封面">
+        <div class="queue-current-copy">
+          <span class="target-label">当前任务</span>
+          <strong id="queueSong"></strong>
+          <span id="queueMessage">正在准备</span>
+        </div>
+        <strong id="queuePercent">0%</strong>
+        <div class="progress-track queue-progress"><div id="queueProgressFill"></div></div>
+      </div>
+      <div id="queueRecent" class="queue-recent hidden"></div>
     </section>
     <div id="toast" role="status" aria-live="polite"></div>
   </main>
+
+  <div id="queueModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="queueModalTitle">
+    <div class="modal-panel">
+      <div class="modal-heading">
+        <div><p class="eyebrow">GLOBAL RENDER QUEUE</p><h2 id="queueModalTitle">队列详情</h2></div>
+        <button id="closeQueueModal" class="text-button modal-close" type="button" aria-label="关闭队列详情">关闭</button>
+      </div>
+      <div id="queueDetailList" class="queue-detail-list"></div>
+    </div>
+  </div>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
