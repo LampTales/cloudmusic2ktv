@@ -107,9 +107,13 @@
           <select id="castVideoSelect"></select>
         </label>
         <button id="openCastApp" class="primary cast-button" type="button">使用投屏应用打开</button>
+        <button id="browserCast" class="secondary cast-button browser-cast-button" type="button">尝试浏览器投屏 · 实验</button>
+        <button id="downloadCastVideo" class="secondary cast-button" type="button">下载视频到本地</button>
         <a id="castDirectLink" class="cast-direct-link" target="_blank" rel="noopener">先测试播放</a>
       </div>
       <p id="castHelp" class="fineprint cast-help">点击后在系统分享菜单中选择 BubbleUPnP，再由应用选择局域网内的播放设备。</p>
+      <p id="browserCastHelp" class="fineprint cast-help browser-cast-help">实验按钮会请求浏览器显示其原生远程播放设备列表；能否发现 DLNA 设备由浏览器和手机系统决定。</p>
+      <video id="castMediaElement" class="cast-media-probe" preload="none" playsinline x-webkit-airplay="allow" aria-hidden="true"></video>
     </section>
 
     <section id="videoBuilder" class="video-builder card">

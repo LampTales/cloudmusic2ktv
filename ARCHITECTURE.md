@@ -85,7 +85,7 @@ cloudmusic2ktv/
 
 `NeteaseClient` 和 `SongDownloadService` 不再全局共享，而是根据当前浏览器会话为每次请求创建。歌曲素材、下载互斥状态和视频队列仍是全局共享状态。
 
-默认监听 `127.0.0.1:7860`，可用 `CLOUDMUSIC2KTV_HOST` 和 `CLOUDMUSIC2KTV_PORT` 覆盖。Flask 以 `threaded=True` 启动，但视频编码器自己的执行池只有一个 worker。
+默认监听 `127.0.0.1:7860`，可用 `CLOUDMUSIC2KTV_HOST` 和 `CLOUDMUSIC2KTV_PORT` 覆盖。Flask 以 `threaded=True` 启动，但视频编码器自己的执行池只有一个 worker。长期公网部署时由外层反向代理终止 HTTPS，项目本身保持 HTTP。
 
 ### API 一览
 
@@ -106,7 +106,7 @@ cloudmusic2ktv/
 | `GET /api/video/queue` | 匿名查询当前任务、等待数量和最近结果 | 无 |
 | `GET /api/video/local/<song_id>` | 匿名扫描当前歌曲可投屏的本地 MP4 | song ID |
 | `GET /api/video/jobs/<job_id>` | 轮询任务状态 | job ID |
-| `GET /api/video/artifact/<song_id>/<filename>` | 返回预览或视频 | 受文件名白名单限制 |
+| `GET /api/video/artifact/<song_id>/<filename>` | 返回预览或视频；`download=1` 时作为附件下载 | 受文件名白名单限制 |
 
 自定义背景上传上限由 Flask 的 `MAX_CONTENT_LENGTH = 32 * 1024 * 1024` 限制为 32 MiB。视频 artifact 路由只允许旧版固定文件名或符合 `video_preview_<12位哈希>.png`、`ktv_<分辨率>_<12位哈希>.mp4` 的文件名，并支持 HEAD 与 HTTP Range。artifact 查找不依赖源素材仍然完整存在，但会拒绝输出目录之外的解析路径。
 
@@ -330,7 +330,9 @@ cloudmusic2ktv/
 
 前端不保存任务 ID，也不建立“我的任务”关系。刷新页面后通过全局队列接口恢复当前任务和进度视图；“等待 n”按钮打开的浮窗直接展示全局当前任务与完整等待列表。
 
-03 区的“使用投屏应用打开”优先使用 Web Share API 分享基于当前页面 origin 的视频 URL，因此局域网访问和未来公网反向代理无需分别配置媒体主机名。非安全上下文（典型为 `http://192.168.x.x`）无法使用 Web Share 时退化为复制 URL，供 BubbleUPnP 手动打开。DLNA 接收端只读取匿名视频 artifact，不接触网易云 Cookie。
+03 区的“使用投屏应用打开”优先使用 Web Share API 分享基于当前页面 origin 的视频 URL，因此局域网访问和未来公网反向代理无需分别配置媒体主机名。非安全上下文（典型为 `http://192.168.x.x`）无法使用 Web Share 时退化为复制 URL，供投屏 App 手动打开。DLNA 接收端只读取匿名视频 artifact，不接触网易云 Cookie。
+
+同一区域的实验按钮使用一个不可见但实际挂载媒体 URL 的 `<video>`：优先调用 `HTMLMediaElement.remote.prompt()`，Safari 下退回 `webkitShowPlaybackTargetPicker()`。调用直接发生在按钮点击栈中，以保留浏览器要求的瞬时用户激活；前端监听 Remote Playback 的 `connecting/connect/disconnect` 事件更新提示。此入口只委托浏览器打开设备列表，不直接实现 SSDP、DLNA SOAP 或设备发现。
 
 ## 9. 输出目录与覆盖行为
 

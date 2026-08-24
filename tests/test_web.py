@@ -68,6 +68,24 @@ def test_video_artifact_supports_head_and_byte_ranges_without_source_materials(m
     assert ranged.headers["Accept-Ranges"] == "bytes"
 
 
+def test_video_artifact_can_be_downloaded_as_an_attachment(monkeypatch, tmp_path):
+    monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    directory = tmp_path / "123_artist_song"
+    directory.mkdir()
+    video = directory / "ktv_720p_012345abcdef.mp4"
+    video.write_bytes(b"generated-video")
+
+    response = web_app.app.test_client().get(
+        f"/api/video/artifact/123/{video.name}?download=1"
+    )
+
+    assert response.status_code == 200
+    assert response.data == b"generated-video"
+    assert response.headers["Content-Disposition"] == (
+        'attachment; filename=ktv_720p_012345abcdef.mp4'
+    )
+
+
 def test_local_video_status_is_missing_when_song_has_no_generated_video(monkeypatch, tmp_path):
     monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
 

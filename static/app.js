@@ -96,6 +96,7 @@ function updateCastSongTarget() {
   $("#castMissing").classList.remove("hidden");
   $("#castControls").classList.add("hidden");
   selectedSongVideos = [];
+  updateCastDirectLink();
 }
 
 async function refreshSelectedVideoStatus() {
@@ -142,11 +143,95 @@ function selectedCastVideo() {
 function updateCastDirectLink() {
   const video = selectedCastVideo();
   const link = $("#castDirectLink");
+  const media = $("#castMediaElement");
+  const browserButton = $("#browserCast");
   if (!video) {
     link.removeAttribute("href");
+    media.removeAttribute("src");
+    media.load();
+    browserButton.disabled = true;
+    updateBrowserCastHelp();
     return;
   }
-  link.href = new URL(video.url, window.location.href).href;
+  const url = new URL(video.url, window.location.href).href;
+  link.href = url;
+  if (media.src !== url) {
+    media.src = url;
+    media.load();
+  }
+  browserButton.disabled = false;
+  updateBrowserCastHelp();
+}
+
+function browserCastMethod() {
+  const media = $("#castMediaElement");
+  if (media.remote && typeof media.remote.prompt === "function") return "remote-playback";
+  if (typeof media.webkitShowPlaybackTargetPicker === "function") return "webkit-picker";
+  return null;
+}
+
+function updateBrowserCastHelp(message = "") {
+  const help = $("#browserCastHelp");
+  if (message) {
+    help.textContent = message;
+    return;
+  }
+  if (!selectedCastVideo()) {
+    help.textContent = "生成完整视频后，才可以尝试浏览器原生投屏。";
+    return;
+  }
+  const method = browserCastMethod();
+  if (method === "remote-playback") {
+    help.textContent = "当前浏览器提供 Remote Playback API；点击实验按钮后，请在浏览器设备列表中检查是否出现纯 K 或其他 DLNA 设备。";
+  } else if (method === "webkit-picker") {
+    help.textContent = "当前浏览器提供 Apple 原生播放目标选择器；它通常只能发现 AirPlay 设备。";
+  } else if (!window.isSecureContext) {
+    help.textContent = "当前局域网 HTTP 页面没有获得浏览器远程播放能力；未来通过公网 HTTPS 访问时请再次测试。";
+  } else {
+    help.textContent = "当前浏览器没有提供网页可调用的远程播放接口，可以换用最新版 Chrome、Edge 或 Safari 现场测试。";
+  }
+}
+
+async function tryBrowserCast() {
+  const selectedVideo = selectedCastVideo();
+  if (!selectedSong || !selectedVideo) return notify("这首歌还没有可投屏的本地视频", true);
+  const media = $("#castMediaElement");
+  const url = new URL(selectedVideo.url, window.location.href).href;
+  if (media.src !== url) {
+    media.src = url;
+    media.load();
+  }
+
+  const method = browserCastMethod();
+  if (!method) {
+    const reason = !window.isSecureContext
+      ? "当前局域网 HTTP 页面没有浏览器投屏权限；请在 HTTPS 环境中再次测试"
+      : "当前浏览器不支持网页端远程播放设备选择器";
+    updateBrowserCastHelp(reason);
+    return notify(reason, true);
+  }
+
+  try {
+    if (method === "remote-playback") {
+      await media.remote.prompt();
+      const states = {connected: "已连接远程设备", connecting: "正在连接远程设备", disconnected: "未连接远程设备"};
+      notify(states[media.remote.state] || "浏览器设备选择器已关闭");
+    } else {
+      media.webkitShowPlaybackTargetPicker();
+      notify("已打开浏览器原生播放目标选择器");
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    const messages = {
+      NotAllowedError: "浏览器拒绝打开设备列表；请确认页面使用 HTTPS，并直接点击实验按钮重试",
+      NotFoundError: "浏览器没有发现可用的远程播放设备",
+      NotSupportedError: "浏览器不支持将这个 MP4 发送到远程设备",
+      InvalidStateError: "视频尚未准备好，无法请求远程播放",
+    };
+    const message = messages[error?.name] || error?.message || "浏览器投屏请求失败";
+    updateBrowserCastHelp(message);
+    notify(message, true);
+  }
 }
 
 function formatFileSize(bytes) {
@@ -205,6 +290,20 @@ async function openCastApp() {
     }
   } catch {}
   notify("无法调用系统分享，请长按“先测试播放”复制视频地址", true);
+}
+
+function downloadCastVideo() {
+  const video = selectedCastVideo();
+  if (!selectedSong || !video) return notify("这首歌还没有可下载的本地视频", true);
+  const url = new URL(video.url, window.location.href);
+  url.searchParams.set("download", "1");
+  const link = document.createElement("a");
+  link.href = url.href;
+  link.download = video.filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  notify(`已开始下载 ${video.resolution} 视频`);
 }
 
 function updateVideoSongTarget(inputPending = false) {
@@ -596,6 +695,8 @@ function closeQueueModal() {
 $("#queueCount").addEventListener("click", openQueueModal);
 $("#castVideoSelect").addEventListener("change", updateCastDirectLink);
 $("#openCastApp").addEventListener("click", openCastApp);
+$("#browserCast").addEventListener("click", tryBrowserCast);
+$("#downloadCastVideo").addEventListener("click", downloadCastVideo);
 $("#closeQueueModal").addEventListener("click", closeQueueModal);
 $("#queueModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeQueueModal(); });
 document.addEventListener("keydown", event => {
@@ -603,6 +704,15 @@ document.addEventListener("keydown", event => {
 });
 
 updateConditionalOptions();
+const castRemote = $("#castMediaElement").remote;
+if (castRemote) {
+  castRemote.addEventListener("connecting", () => updateBrowserCastHelp("浏览器正在连接远程播放设备…"));
+  castRemote.addEventListener("connect", () => {
+    updateBrowserCastHelp("浏览器已连接远程播放设备；播放控制由当前网页和浏览器共同管理。");
+    notify("浏览器已连接远程播放设备");
+  });
+  castRemote.addEventListener("disconnect", () => updateBrowserCastHelp());
+}
 $("#castHelp").textContent = typeof navigator.share === "function"
   ? "点击后在系统分享菜单中选择 BubbleUPnP，再由应用选择局域网内的播放设备。"
   : "当前浏览器或局域网 HTTP 页面不能调用系统分享；点击后会复制播放地址，请在 BubbleUPnP 中打开网络地址。";

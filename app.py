@@ -232,7 +232,12 @@ def video_artifact(song_id: int, filename: str) -> Any:
     path = local_artifact_path(song_id, filename)
     if path is None:
         return error_response("文件尚未生成", "artifact_missing", 404)
-    return send_file(path, conditional=True)
+    return send_file(
+        path,
+        conditional=True,
+        as_attachment=request.args.get("download") == "1",
+        download_name=filename,
+    )
 
 
 @app.errorhandler(NeteaseError)

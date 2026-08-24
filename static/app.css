@@ -87,13 +87,16 @@ code { color: #a6c1ff; }
 .cast-song-copy strong { font-size: 15px; }
 .cast-song-copy > span:not(.target-label) { color: var(--muted); font-size: 12px; }
 .cast-missing { color: var(--muted); padding: 18px 2px 2px 73px; font-size: 13px; }
-.cast-controls { display: grid; grid-template-columns: minmax(240px, 1fr) auto auto; gap: 12px; align-items: end; margin: 18px 0 0 73px; }
+.cast-controls { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto auto auto; gap: 12px; align-items: end; margin: 18px 0 0 73px; }
 .cast-controls label { margin: 0; }
 .cast-controls select { margin-top: 8px; }
-.cast-button { width: auto; min-width: 190px; margin: 0; padding: 14px 18px; }
+.cast-button { width: auto; min-width: 180px; margin: 0; padding: 14px 18px; }
+.browser-cast-button { color: #dfe8ff; }
 .cast-direct-link { color: #a8c2ff; padding: 13px 4px; font-size: 12px; font-weight: 700; text-decoration: none; white-space: nowrap; }
 .cast-direct-link:hover { text-decoration: underline; }
 .cast-help { margin: 13px 0 0 73px; }
+.browser-cast-help { margin-top: 5px; }
+.cast-media-probe { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .logged-in { align-items: center; gap: 14px; padding-top: 10px; }
 .avatar-wrap img { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; }
 .logged-in div:nth-child(2) { flex: 1; }
