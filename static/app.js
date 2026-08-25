@@ -4,12 +4,40 @@ let toastTimer = null;
 let previewTimer = null;
 let previewRequest = 0;
 let accountLoggedIn = false;
+let accountRole = null;
+let neteaseBound = false;
 let selectedSongLocal = {status: "missing", ready: false, message: "尚未选择歌曲"};
 let selectedSongVideos = [];
 let videoStatusRequest = 0;
 let lastQueueArtifactUrl = null;
 let queueTimer = null;
 let latestQueue = {current: null, queued: [], queued_count: 0, recent: null};
+let registerQrVerified = false;
+let qrPollTimer = null;
+let ydDeviceTokenPromise = null;
+
+function getYdDeviceToken() {
+  if (ydDeviceTokenPromise) return ydDeviceTokenPromise;
+  ydDeviceTokenPromise = new Promise(resolve => {
+    const finish = async () => {
+      try {
+        if (typeof window.createNEFingerprint !== "function") return resolve("");
+        const result = await window.createNEFingerprint({appId: "9d0ef7e0905d422cba1ecf7e73d77e67", timeout: 6000}).getToken();
+        resolve(String(result?.token || ""));
+      } catch { resolve(""); }
+    };
+    if (typeof window.createNEFingerprint === "function") finish();
+    else {
+      const script = document.createElement("script");
+      script.src = "https://st.music.163.com/device/signature/create/deviceid.js";
+      script.onload = finish;
+      script.onerror = () => resolve("");
+      document.head.appendChild(script);
+      setTimeout(() => resolve(""), 7000);
+    }
+  });
+  return ydDeviceTokenPromise;
+}
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
@@ -20,7 +48,12 @@ async function api(url, options = {}) {
   let data;
   try { data = await response.json(); }
   catch { throw new Error(`服务返回异常（HTTP ${response.status}）`); }
-  if (!response.ok || !data.ok) throw new Error(data?.error?.message || `请求失败（HTTP ${response.status}）`);
+  if (!response.ok || !data.ok) {
+    const error = new Error(data?.error?.message || `请求失败（HTTP ${response.status}）`);
+    error.code = data?.error?.code;
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 
@@ -42,14 +75,19 @@ async function refreshStatus() {
   try {
     const data = await api("/api/status");
     accountLoggedIn = data.logged_in;
+    accountRole = data.role || null;
+    neteaseBound = Boolean(data.netease_bound);
     const pill = $("#accountPill");
     pill.classList.toggle("online", data.logged_in);
-    pill.lastElementChild.textContent = data.logged_in ? `已登录 · ${data.profile.nickname}` : "尚未登录";
+    pill.lastElementChild.textContent = data.logged_in ? `已登录 · ${data.profile.username || data.profile.nickname}` : "尚未登录";
     $("#loggedOut").classList.toggle("hidden", data.logged_in);
     $("#loggedIn").classList.toggle("hidden", !data.logged_in);
+    if (!data.logged_in) $("#neteaseReauthForm").classList.add("hidden");
+    $("#manageAllowlist").classList.toggle("hidden", !data.logged_in || accountRole !== "admin");
     if (data.logged_in) {
-      $("#nickname").textContent = data.profile.nickname;
+      $("#nickname").textContent = `${data.profile.username || data.profile.nickname} · ${data.profile.nickname || ""}`;
       $("#avatar").src = data.profile.avatarUrl || "";
+      $("#neteaseBindingStatus").textContent = neteaseBound ? "网站账号已登录 · 已绑定网易云账号" : "网站账号已登录 · 尚未绑定网易云";
     }
     updateRenderAvailability();
   } catch (error) { notify(error.message, true); }
@@ -397,15 +435,195 @@ function setFinderMode(mode) {
 }
 
 function openAccountModal() {
+  closeNeteaseReauth();
+  $("#loggedOut").classList.toggle("hidden", accountLoggedIn);
+  $("#loggedIn").classList.toggle("hidden", !accountLoggedIn);
   $("#accountModal").classList.remove("hidden");
   document.body.classList.add("modal-open");
-  $(accountLoggedIn ? "#logout" : "#phone").focus();
+  $(accountRole === "admin" ? "#manageAllowlist" : accountLoggedIn ? "#logout" : "#websiteUsername").focus();
 }
 
 function closeAccountModal() {
+  stopQrPolling();
+  closeNeteaseReauth();
   $("#accountModal").classList.add("hidden");
   document.body.classList.remove("modal-open");
   $("#accountPill").focus();
+}
+
+function setWebsiteAuthMode(mode) {
+  const register = mode === "register";
+  $("#websiteLoginMode").classList.toggle("active", !register);
+  $("#websiteRegisterMode").classList.toggle("active", register);
+  $("#websiteLoginForm").classList.toggle("hidden", register);
+  $("#websiteRegisterForm").classList.toggle("hidden", !register);
+  if (register) $("#registerUsername").focus();
+  else $("#websiteUsername").focus();
+}
+
+function stopQrPolling() {
+  if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+}
+
+async function startQrFlow({image, status, link, button, onVerified}) {
+  stopQrPolling();
+  busy(button, true, "获取中…");
+  try {
+    const data = await api("/api/auth/qr/start", {
+      method: "POST",
+      body: JSON.stringify({browser_user_agent: navigator.userAgent}),
+    });
+    image.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(data.qr_url)}`;
+    link.href = data.qr_url;
+    status.textContent = "请使用网易云音乐 App 扫描二维码。";
+    const ydDeviceToken = await getYdDeviceToken();
+    qrPollTimer = setInterval(async () => {
+      try {
+        const result = await api("/api/auth/qr/poll", {
+          method: "POST",
+          body: JSON.stringify({
+            yd_device_token: ydDeviceToken,
+            browser_user_agent: navigator.userAgent,
+          }),
+        });
+        if (result.status === "scanned") status.textContent = "已扫描，请在网易云音乐 App 中确认登录。";
+        if (result.status === "verified") {
+          stopQrPolling();
+          status.textContent = `已验证：${result.profile?.nickname || "网易云用户"}`;
+          onVerified(result);
+        }
+      } catch (error) {
+        stopQrPolling();
+        status.textContent = error.message;
+        notify(error.message, true);
+      }
+    }, 1200);
+  } catch (error) { notify(error.message, true); }
+  finally { busy(button, false); }
+}
+
+function openNeteaseReauth() {
+  if (!accountLoggedIn) return openAccountModal();
+  $("#accountModal").classList.remove("hidden");
+  $("#neteaseReauthForm").classList.remove("hidden");
+  $("#loggedIn").classList.add("hidden");
+  $("#loggedOut").classList.add("hidden");
+  document.body.classList.add("modal-open");
+  $("#reauthPhone").focus();
+}
+
+function closeNeteaseReauth() {
+  stopQrPolling();
+  $("#neteaseReauthForm").classList.add("hidden");
+  if (accountLoggedIn) $("#loggedIn").classList.remove("hidden");
+}
+
+function openAdminModal() {
+  if (accountRole !== "admin") return notify("只有管理员可以管理允许名单", true);
+  $("#adminModal").classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  refreshAdminUsers();
+  $("#adminUserSearchInput").focus();
+}
+
+function closeAdminModal() {
+  $("#adminModal").classList.add("hidden");
+  document.body.classList.remove("modal-open");
+  $("#manageAllowlist").focus();
+}
+
+function renderAdminUserRow(user, removable) {
+  const row = document.createElement("div");
+  row.className = "admin-user-row";
+  if (user.avatarUrl) {
+    const image = document.createElement("img");
+    image.src = user.avatarUrl;
+    image.alt = "";
+    row.append(image);
+  }
+  const copy = document.createElement("div");
+  copy.className = "admin-user-copy";
+  const name = document.createElement("strong");
+  name.textContent = user.nickname || "网易云用户";
+  const id = document.createElement("small");
+  id.textContent = `ID ${user.userId}`;
+  copy.append(name, id);
+  row.append(copy);
+  const badge = document.createElement("span");
+  badge.className = "admin-role-badge";
+  badge.textContent = user.role === "admin" ? "管理员" : "普通用户";
+  row.append(badge);
+  if (removable && user.role !== "admin") {
+    const remove = document.createElement("button");
+    remove.className = "secondary compact";
+    remove.textContent = "删除";
+    remove.addEventListener("click", () => deleteAdminUser(user.userId, remove));
+    row.append(remove);
+  }
+  return row;
+}
+
+async function refreshAdminUsers() {
+  const list = $("#adminUserList");
+  list.replaceChildren();
+  try {
+    const data = await api("/api/admin/users");
+    if (!data.users.length) {
+      list.innerHTML = '<p class="admin-empty">允许名单为空，下一次成功登录会完成初始化</p>';
+      return;
+    }
+    for (const user of data.users) list.append(renderAdminUserRow(user, true));
+  } catch (error) { list.textContent = error.message; }
+}
+
+async function searchAdminUsers() {
+  const query = $("#adminUserSearchInput").value.trim();
+  if (!query) return notify("请输入网易云用户关键词", true);
+  const button = $("#adminUserSearch");
+  busy(button, true, "搜索中…");
+  const results = $("#adminSearchResults");
+  results.replaceChildren();
+  try {
+    const data = await api(`/api/admin/search-users?q=${encodeURIComponent(query)}`, {headers: {}});
+    if (!data.users.length) {
+      results.innerHTML = '<p class="admin-empty">没有找到用户</p>';
+      return;
+    }
+    for (const user of data.users) {
+      const row = renderAdminUserRow(user, false);
+      const add = document.createElement("button");
+      add.className = "primary compact";
+      add.textContent = "添加";
+      add.addEventListener("click", () => addAdminUser(user, add));
+      row.append(add);
+      results.append(row);
+    }
+  } catch (error) { notify(error.message, true); }
+  finally { busy(button, false); }
+}
+
+async function addAdminUser(user, button) {
+  busy(button, true, "添加中…");
+  try {
+    await api("/api/admin/users", {
+      method: "POST",
+      body: JSON.stringify({userId: user.userId, role: $("#adminUserRole").value}),
+    });
+    notify(`已添加 ${user.nickname || "网易云用户"}`);
+    await refreshAdminUsers();
+  } catch (error) { notify(error.message, true); }
+  finally { busy(button, false); }
+}
+
+async function deleteAdminUser(userId, button) {
+  if (!window.confirm("确定要从允许名单删除这个普通用户吗？")) return;
+  busy(button, true, "删除中…");
+  try {
+    await api(`/api/admin/users/${encodeURIComponent(userId)}`, {method: "DELETE"});
+    notify("已删除名单账号");
+    await refreshAdminUsers();
+  } catch (error) { notify(error.message, true); }
+  finally { busy(button, false); }
 }
 
 function setupSectionNavigation() {
@@ -432,7 +650,30 @@ $("#searchModeId").addEventListener("click", () => setFinderMode("id"));
 $("#accountPill").addEventListener("click", openAccountModal);
 $("#closeAccountModal").addEventListener("click", closeAccountModal);
 $("#accountModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeAccountModal(); });
+$("#manageAllowlist").addEventListener("click", openAdminModal);
+$("#closeAdminModal").addEventListener("click", closeAdminModal);
+$("#adminModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeAdminModal(); });
+$("#adminUserSearch").addEventListener("click", searchAdminUsers);
+$("#adminUserSearchInput").addEventListener("keydown", event => { if (event.key === "Enter") searchAdminUsers(); });
+$("#refreshAdminUsers").addEventListener("click", refreshAdminUsers);
 $("#goToBuilder").addEventListener("click", () => $("#videoBuilder").scrollIntoView({behavior: "smooth", block: "start"}));
+
+$("#websiteLoginMode").addEventListener("click", () => setWebsiteAuthMode("login"));
+$("#websiteRegisterMode").addEventListener("click", () => { registerQrVerified = false; setWebsiteAuthMode("register"); });
+
+$("#startQrRegister").addEventListener("click", async (event) => {
+  $("#qrRegisterPanel").classList.remove("hidden");
+  await startQrFlow({
+    image: $("#qrRegisterImage"), status: $("#qrRegisterStatus"), link: $("#qrRegisterLink"),
+    button: event.currentTarget,
+    onVerified: () => {
+      registerQrVerified = true;
+      $("#smsRegisterFields").classList.add("hidden");
+      notify("网易云账号验证成功，请填写网站用户名和密码后创建");
+    },
+  });
+});
+$("#refreshQrRegister").addEventListener("click", () => $("#startQrRegister").click());
 
 $("#sendCaptcha").addEventListener("click", async (event) => {
   const button = event.currentTarget;
@@ -453,9 +694,77 @@ $("#login").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   busy(button, true, "登录中…");
   try {
-    await api("/api/auth/login", {method: "POST", body: JSON.stringify({phone: $("#phone").value, captcha: $("#captcha").value, country_code: $("#countryCode").value})});
-    $("#phone").value = ""; $("#captcha").value = "";
+    await api("/api/auth/login", {method: "POST", body: JSON.stringify({username: $("#websiteUsername").value, password: $("#websitePassword").value})});
+    $("#websitePassword").value = "";
     notify("登录成功"); await refreshStatus(); closeAccountModal();
+  } catch (error) { notify(error.message, true); }
+  finally { busy(button, false); }
+});
+
+$("#register").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  busy(button, true, "创建中…");
+  try {
+    await api("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({
+        username: $("#registerUsername").value,
+        password: $("#registerPassword").value,
+        ...(registerQrVerified ? {qr: true} : {
+          phone: $("#phone").value,
+          captcha: $("#captcha").value,
+          country_code: $("#countryCode").value,
+        }),
+      }),
+    });
+    $("#registerPassword").value = "";
+    $("#phone").value = "";
+    $("#captcha").value = "";
+    notify("网站账号创建成功");
+    await refreshStatus();
+    closeAccountModal();
+  } catch (error) { notify(error.message, true); }
+  finally { busy(button, false); }
+});
+
+$("#reauthNetease").addEventListener("click", openNeteaseReauth);
+$("#startQrReauth").addEventListener("click", async (event) => {
+  $("#qrReauthPanel").classList.remove("hidden");
+  await startQrFlow({
+    image: $("#qrReauthImage"), status: $("#qrReauthStatus"), link: $("#qrReauthLink"),
+    button: event.currentTarget,
+    onVerified: async () => {
+      $("#smsReauthFields").classList.add("hidden");
+      notify("网易云绑定已更新");
+      closeNeteaseReauth();
+      await refreshStatus();
+    },
+  });
+});
+$("#refreshQrReauth").addEventListener("click", () => $("#startQrReauth").click());
+$("#sendReauthCaptcha").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  busy(button, true, "发送中…");
+  try {
+    await api("/api/auth/captcha", {method: "POST", body: JSON.stringify({phone: $("#reauthPhone").value, country_code: $("#reauthCountryCode").value})});
+    notify("验证码已发送，请查看短信");
+  } catch (error) { notify(error.message, true); }
+  finally { busy(button, false); }
+});
+
+$("#reauthNeteaseSubmit").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  busy(button, true, "验证中…");
+  try {
+    await api("/api/auth/reauth", {
+      method: "POST",
+      body: JSON.stringify({phone: $("#reauthPhone").value, captcha: $("#reauthCaptcha").value, country_code: $("#reauthCountryCode").value}),
+    });
+    notify("网易云绑定已更新");
+    $("#reauthPhone").value = "";
+    $("#reauthCaptcha").value = "";
+    closeNeteaseReauth();
+    await refreshStatus();
   } catch (error) { notify(error.message, true); }
   finally { busy(button, false); }
 });
@@ -526,7 +835,10 @@ $("#download").addEventListener("click", async (event) => {
     notify("下载完成");
     applyLocalStatus(completedLocal);
     await refreshVideoPreview(false);
-  } catch (error) { notify(error.message, true); }
+  } catch (error) {
+    if (error.code === "netease_reauth_required") openNeteaseReauth();
+    notify(error.message, true);
+  }
   finally {
     busy(button, false);
     if (!completedLocal) await refreshSelectedLocalStatus();
@@ -620,7 +932,7 @@ $("#customBackground").addEventListener("change", async (event) => {
 
 $("#renderVideo").addEventListener("click", async (event) => {
   if (!selectedSong || !selectedSongLocal.ready) return notify("请先准备当前歌曲的共享素材", true);
-  if (!accountLoggedIn) return notify("请先登录网易云账号", true);
+  if (!accountLoggedIn) return notify("请先登录网站账号", true);
   const button = event.currentTarget;
   const taskSong = Object.freeze({...selectedSong});
   const taskOptions = Object.freeze({...videoOptions()});
@@ -761,6 +1073,7 @@ $("#closeQueueModal").addEventListener("click", closeQueueModal);
 $("#queueModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeQueueModal(); });
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !$("#queueModal").classList.contains("hidden")) closeQueueModal();
+  else if (event.key === "Escape" && !$("#adminModal").classList.contains("hidden")) closeAdminModal();
   else if (event.key === "Escape" && !$("#accountModal").classList.contains("hidden")) closeAccountModal();
 });
 

@@ -1,6 +1,29 @@
 import app as web_app
+from cloudmusic2ktv.access import AllowlistStore
 from cloudmusic2ktv.netease import NeteaseClient
 from cloudmusic2ktv.sessions import FileSessionStore
+
+
+def member_client(monkeypatch, tmp_path, *, user_id="2", role="user"):
+    sessions = FileSessionStore(tmp_path / "sessions")
+    users = AllowlistStore(tmp_path / "allowlist.json")
+    users.authorize_login({"userId": 1, "nickname": "管理员", "avatarUrl": ""})
+    profile = {
+        "website_username": "test-user",
+        "netease_user_id": str(user_id),
+        "nickname": "测试用户",
+        "avatarUrl": "",
+    }
+    if user_id != "1":
+        users.add({"userId": int(user_id), "nickname": "测试用户", "avatarUrl": ""}, role, added_by="1")
+    with sessions.open(None, create=True) as session:
+        token = session.token
+        session.profile = profile
+    monkeypatch.setattr(web_app, "auth_sessions", sessions)
+    monkeypatch.setattr(web_app, "allowlist", users)
+    client = web_app.app.test_client()
+    client.set_cookie("localhost", "cloudmusic2ktv_session", token)
+    return client
 
 
 def test_custom_background_upload_limit_is_32_mib():
@@ -20,21 +43,22 @@ def test_video_submission_requires_a_logged_in_browser_session():
     assert response.get_json()["error"]["code"] == "login_required"
 
 
-def test_global_queue_status_is_available_without_login():
+def test_global_queue_status_requires_a_listed_member():
     response = web_app.app.test_client().get("/api/video/queue")
-    assert response.status_code == 200
-    assert response.get_json()["ok"] is True
+    assert response.status_code == 401
+    assert response.get_json()["error"]["code"] == "login_required"
 
 
 def test_local_video_status_lists_only_shareable_generated_mp4(monkeypatch, tmp_path):
     monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    client = member_client(monkeypatch, tmp_path)
     directory = tmp_path / "123_artist_song"
     directory.mkdir()
     video = directory / "ktv_720p_012345abcdef.mp4"
     video.write_bytes(b"generated-video")
     (directory / "ktv_test_720p.mp4").write_bytes(b"test-video")
 
-    response = web_app.app.test_client().get("/api/video/local/123")
+    response = client.get("/api/video/local/123")
 
     assert response.status_code == 200
     local = response.get_json()["local"]
@@ -51,12 +75,11 @@ def test_local_video_status_lists_only_shareable_generated_mp4(monkeypatch, tmp_
 
 def test_video_artifact_supports_head_and_byte_ranges_without_source_materials(monkeypatch, tmp_path):
     monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    client = member_client(monkeypatch, tmp_path)
     directory = tmp_path / "123_artist_song"
     directory.mkdir()
     video = directory / "ktv_1080p.mp4"
     video.write_bytes(b"0123456789")
-    client = web_app.app.test_client()
-
     head = client.head("/api/video/artifact/123/ktv_1080p.mp4")
     ranged = client.get(
         "/api/video/artifact/123/ktv_1080p.mp4", headers={"Range": "bytes=2-5"}
@@ -71,6 +94,7 @@ def test_video_artifact_supports_head_and_byte_ranges_without_source_materials(m
 
 def test_video_artifact_can_be_downloaded_as_an_attachment(monkeypatch, tmp_path):
     monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    client = member_client(monkeypatch, tmp_path)
     directory = tmp_path / "123_artist_song"
     directory.mkdir()
     video = directory / "ktv_720p_012345abcdef.mp4"
@@ -79,7 +103,7 @@ def test_video_artifact_can_be_downloaded_as_an_attachment(monkeypatch, tmp_path
         '{"id": 123, "name": "测试歌曲", "artist": "测试歌手"}', encoding="utf-8"
     )
 
-    response = web_app.app.test_client().get(
+    response = client.get(
         f"/api/video/artifact/123/{video.name}?download=1"
     )
 
@@ -93,8 +117,9 @@ def test_video_artifact_can_be_downloaded_as_an_attachment(monkeypatch, tmp_path
 
 def test_local_video_status_is_missing_when_song_has_no_generated_video(monkeypatch, tmp_path):
     monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    client = member_client(monkeypatch, tmp_path)
 
-    response = web_app.app.test_client().get("/api/video/local/456")
+    response = client.get("/api/video/local/456")
 
     assert response.status_code == 200
     assert response.get_json()["local"] == {

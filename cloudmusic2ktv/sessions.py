@@ -25,6 +25,7 @@ class AuthSession:
     created_at: int
     last_used_at: int
     profile: dict[str, Any] | None
+    pending_qr: dict[str, Any] | None = None
 
 
 class FileSessionStore:
@@ -68,6 +69,7 @@ class FileSessionStore:
                 "created_at": now,
                 "last_used_at": now,
                 "profile": None,
+                "pending_qr": None,
                 "cookies": [],
             }
 
@@ -85,6 +87,7 @@ class FileSessionStore:
                 created_at=int(record.get("created_at") or time.time()),
                 last_used_at=int(record.get("last_used_at") or time.time()),
                 profile=record.get("profile") if isinstance(record.get("profile"), dict) else None,
+                pending_qr=record.get("pending_qr") if isinstance(record.get("pending_qr"), dict) else None,
             )
             try:
                 yield session
@@ -97,6 +100,7 @@ class FileSessionStore:
                         "created_at": session.created_at,
                         "last_used_at": now if touch else session.last_used_at,
                         "profile": session.profile,
+                        "pending_qr": session.pending_qr,
                         "cookies": client.export_cookies(),
                     },
                 )

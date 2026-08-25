@@ -78,12 +78,15 @@ cloudmusic2ktv/
 
 ## 4. 顶层 Web 应用
 
-`app.py` 在模块导入时创建两个主要单例：
+`app.py` 在模块导入时创建主要单例：
 
-- `auth_sessions = FileSessionStore(...)`：用浏览器随机 Cookie 映射服务器本地身份文件；
+- `auth_sessions = FileSessionStore(...)`：用浏览器随机 Cookie 映射网站账号会话文件；
+- `allowlist = AllowlistStore(...)`：在 `instance/allowlist.json` 保存网易云 `userId` 与 `admin/user` 角色；首个成功登录的账号自动初始化为管理员；
+- `website_accounts = WebsiteAccountStore(...)`：在 `instance/accounts.json` 保存网站用户名、密码哈希和不可换绑的网易云 `userId`；
+- `netease_bindings = NeteaseBindingStore(...)`：在 `instance/netease_bindings.json` 按网站账号绑定的网易云 `userId` 保存共享 Cookie；
 - `video_jobs = VideoJobManager(...)`：进程内视频任务管理器。
 
-`NeteaseClient` 和 `SongDownloadService` 不再全局共享，而是根据当前浏览器会话为每次请求创建。歌曲素材、下载互斥状态和视频队列仍是全局共享状态。
+`NeteaseClient` 和 `SongDownloadService` 不再全局共享，而是根据当前网站账号绑定的网易云 Cookie 或匿名模式为每次请求创建。歌曲素材、下载互斥状态和视频队列仍是全局共享状态。
 
 默认监听 `0.0.0.0:7860`，可用 `CLOUDMUSIC2KTV_HOST` 和 `CLOUDMUSIC2KTV_PORT` 覆盖；只允许本机访问时将 `CLOUDMUSIC2KTV_HOST` 设为 `127.0.0.1`。Flask 以 `threaded=True` 启动，但视频编码器自己的执行池只有一个 worker。长期公网部署时由外层反向代理终止 HTTPS，项目本身保持 HTTP。
 
@@ -93,20 +96,26 @@ cloudmusic2ktv/
 | --- | --- | --- |
 | `GET /` | WebUI | 无 |
 | `GET /api/status` | 查询登录状态 | 无 |
-| `POST /api/auth/captcha` | 发送短信验证码 | `phone`, `country_code` |
-| `POST /api/auth/login` | 手机号验证码登录 | `phone`, `captcha`, `country_code` |
-| `POST /api/auth/logout` | 退出并删除本地 Cookie | 无 |
-| `GET /api/search?q=...` | 搜索歌曲，最多 12 条 | 查询字符串 |
-| `POST /api/song/inspect` | 按 ID/链接读取歌曲信息 | `song` |
-| `GET /api/song/local/<song_id>` | 查询共享素材状态 | song ID |
-| `POST /api/song/download` | 下载并校验全部素材 | `song`, `level` |
-| `POST /api/video/preview` | 生成静态预览 | `song`, `options` |
-| `POST /api/video/background` | 保存当前歌曲自定义背景 | multipart `song`, `background` |
-| `POST /api/video/render` | 创建后台视频任务 | `song`, `options` |
-| `GET /api/video/queue` | 匿名查询当前任务、等待数量和最近结果 | 无 |
-| `GET /api/video/local/<song_id>` | 匿名扫描当前歌曲可投屏的本地 MP4 | song ID |
-| `GET /api/video/jobs/<job_id>` | 轮询任务状态 | job ID |
-| `GET /api/video/artifact/<song_id>/<filename>` | 返回预览或视频；`download=1` 时作为附件下载并使用歌曲名/作者命名 | 受文件名白名单限制 |
+| `POST /api/auth/captcha` | 为新建网站用户或重新验证网易云账号发送短信验证码 | `phone`, `country_code` |
+| `POST /api/auth/qr/start` | 创建当前网易云网页扫码验证二维码 | 无 |
+| `POST /api/auth/qr/poll` | 轮询扫码验证状态；成功后得到网易云身份 | 无 |
+| `POST /api/auth/login` | 网站用户名密码登录，不调用网易云登录接口 | `username`, `password` |
+| `POST /api/auth/register` | 验证名单内网易云账号并创建不可换绑的网站用户 | 网站账号、手机号/验证码或 `qr: true` |
+| `POST /api/auth/reauth` | 重新验证当前绑定的网易云账号并更新共享 Cookie | `phone`, `captcha`, `country_code` |
+| `POST /api/auth/logout` | 退出网站账号，不删除共享网易云绑定 | 无 |
+| `GET /api/search?q=...` | 搜索歌曲（名单成员） | 查询字符串 |
+| `POST /api/song/inspect` | 按 ID/链接读取歌曲信息（名单成员） | `song` |
+| `GET /api/song/local/<song_id>` | 查询共享素材状态（名单成员） | song ID |
+| `POST /api/song/download` | 下载并校验全部素材（名单成员） | `song`, `level` |
+| `POST /api/video/preview` | 生成静态预览（名单成员） | `song`, `options` |
+| `POST /api/video/background` | 保存当前歌曲自定义背景（名单成员） | multipart `song`, `background` |
+| `POST /api/video/render` | 创建后台视频任务（名单成员） | `song`, `options` |
+| `GET /api/video/queue` | 查询当前任务、等待数量和最近结果（名单成员） | 无 |
+| `GET /api/video/local/<song_id>` | 扫描当前歌曲可投屏的本地 MP4（名单成员） | song ID |
+| `GET /api/video/jobs/<job_id>` | 轮询任务状态（名单成员） | job ID |
+| `GET /api/video/artifact/<song_id>/<filename>` | 返回预览或视频（名单成员）；`download=1` 时作为附件下载并使用歌曲名/作者命名 | 受文件名白名单限制 |
+| `GET /api/admin/users`、`/api/admin/search-users` | 查看名单、搜索网易云用户（管理员） | 查询字符串 |
+| `POST/DELETE /api/admin/users` | 添加或删除名单账号（管理员；不能删除管理员） | 用户 ID、角色 |
 
 自定义背景上传上限由 Flask 的 `MAX_CONTENT_LENGTH = 32 * 1024 * 1024` 限制为 32 MiB。视频 artifact 路由只允许旧版固定文件名或符合 `video_preview_<12位哈希>.png`、`ktv_<分辨率>_<12位哈希>.mp4` 的文件名，并支持 HEAD 与 HTTP Range。artifact 查找不依赖源素材仍然完整存在，但会拒绝输出目录之外的解析路径。下载附件时，后端根据 `metadata.json` 将视频命名为 `ktv_<分辨率>_<作者>_<歌曲名>.mp4`；服务器内部文件仍保留选项哈希，以区分不同配置。
 
@@ -123,17 +132,19 @@ cloudmusic2ktv/
 
 ### 会话与登录
 
-- 每个浏览器通过 `HttpOnly`、`SameSite=Lax` 的随机会话 Cookie 标识；
-- 真正的网易云 Cookie 保存在 `instance/sessions/<会话ID SHA-256>.json`；
-- 身份文件包含创建时间、最后使用时间、最小账号摘要和网易云 Cookie，不包含浏览器识别码明文；
+- 每个浏览器通过 `HttpOnly`、`SameSite=Lax` 的随机会话 Cookie 标识网站账号；
+- 网站用户名密码保存在 `instance/accounts.json`，密码使用 scrypt 哈希；
+- 网易云 Cookie 按绑定的网易云 `userId` 保存在 `instance/netease_bindings.json`，同一网站账号的不同设备共享这份绑定；
 - 身份使用时进行单文件惰性过期检查，默认 90 天；服务启动和成功登录后遍历清理过期文件；
-- 登录成功后轮换浏览器识别码，退出只删除当前浏览器的身份文件；
-- 同一浏览器的网易云请求使用进程内锁串行化，身份文件用 `.part` 原子替换；
+- 网站登录成功后轮换浏览器会话 Cookie；退出网站不会注销网易云或删除绑定；
+- 绑定文件使用 `.part` 原子替换；
 - User-Agent、Referer、Origin 模拟网易云网页播放器；
 - `requests.Session.trust_env` 默认关闭，避免继承启动环境中的无效 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`；确需环境代理时可显式构造 `NeteaseClient(trust_env_proxy=True)`；
 - 手机验证码发送使用 `/api/sms/captcha/sent`；
-- 登录使用 `/weapi/login/cellphone`；
-- 浏览器没有有效会话时仍可搜索、读取公开歌曲并使用共享素材。
+- 扫码验证使用当前网页实际发出的加密接口 `/weapi/login/qrcode/unikey` 与 `/weapi/login/qrcode/client/login`，二维码短期凭证记录在网站服务端会话中；浏览器会尝试生成当前网页的 `ydDeviceToken` 并只在轮询请求中转发，不写入本地文件；
+- 网易云返回 8821/8830 时表示扫码授权链路被风控拒绝，前端会停止轮询并要求刷新二维码；这不是名单权限校验失败；
+- 短信登录仍保留 `/weapi/login/cellphone` 兼容回退；网易云当前网页的 `/api/login/cellphone` 需要浏览器私有的 encrypt-fetch 与反作弊令牌，不能仅靠普通服务端请求替代；
+- 未登录网站账号时只能访问网站登录入口；网站账号已登录但网易云 Cookie 失效时，公开歌曲接口和免费歌曲下载可以回退匿名客户端，本地资源仍可访问，付费歌曲会要求重新验证原绑定账号。
 
 ### 歌曲接口
 
@@ -302,7 +313,7 @@ cloudmusic2ktv/
 }
 ```
 
-任务不保存提交者身份；`POST /api/video/render` 只在提交瞬间检查当前浏览器已登录。相同歌曲和完全相同选项的活动任务会去重。`GET /api/video/queue` 匿名返回当前任务、等待数量和最近完成/失败结果，不需要发送登录 Cookie。
+任务不保存提交者身份；`POST /api/video/render` 在提交时检查当前浏览器的名单成员身份。相同歌曲和完全相同选项的活动任务会去重。视频队列和 artifact 接口也要求名单成员会话。
 
 后端重启会丢失全部任务状态，并终止正在运行的 FFmpeg/渲染过程。不要在视频生成期间重启服务。
 
@@ -312,10 +323,10 @@ cloudmusic2ktv/
 
 - `selectedSong`：02 区最后一次成功读取/点击的歌曲；
 - `selectedSongLocal`：当前歌曲共享素材的 `missing/partial/downloading/ready/error` 状态；
-- `accountLoggedIn`：当前浏览器自己的网易云登录状态；
+- `accountLoggedIn`：当前浏览器的网站账号登录状态；网易云绑定是否存在由状态接口单独返回；
 - `cloudmusic2ktv.selectedSongId`：localStorage 中用于刷新后恢复选歌的 ID；
 - `previewRequest`：丢弃过期预览响应，避免较慢响应覆盖较新设置；
-- `queueTimer`：匿名轮询全局视频队列。
+- `queueTimer`：轮询当前名单成员可见的视频队列。
 - `selectedSongVideos`：03 区为当前歌曲从本地扫描到的可投屏 MP4；不依赖登录或素材完整状态；
 - `videoStatusRequest`：丢弃切歌后才返回的过期本地视频查询。
 
@@ -326,11 +337,11 @@ cloudmusic2ktv/
 3. 搜索结果列表不依赖搜索接口中的封面字段；点击结果后按歌曲 ID 调用 inspect，重新取得完整详情和下载区封面；
 4. `showSong()` 同步 02/03 区、保存 ID、隐藏旧结果并查询共享素材；
 5. 本地已有完整 metadata、歌词、音频和封面时直接开放预览，不依赖登录或网易云网络；
-6. 视频提交按钮只有在素材完整且当前浏览器已登录时可用；提交成功后立即恢复，不跟踪“我的任务”。
+6. 视频提交按钮只有在素材完整且当前浏览器的网站账号已登录时可用；提交成功后立即恢复，不跟踪“我的任务”。
 
 前端不保存任务 ID，也不建立“我的任务”关系。刷新页面后通过全局队列接口恢复当前任务和进度视图；“等待 n”按钮打开的浮窗直接展示全局当前任务与完整等待列表。
 
-03 区的“使用投屏应用打开”优先使用 Web Share API 分享基于当前页面 origin 的视频 URL，因此局域网访问和未来公网反向代理无需分别配置媒体主机名。非安全上下文（典型为 `http://192.168.x.x`）无法使用 Web Share 时退化为复制 URL，供投屏 App 手动打开。DLNA 接收端只读取匿名视频 artifact，不接触网易云 Cookie。
+03 区的“使用投屏应用打开”优先使用 Web Share API 分享基于当前页面 origin 的视频 URL，因此局域网访问和未来公网反向代理无需分别配置媒体主机名。非安全上下文（典型为 `http://192.168.x.x`）无法使用 Web Share 时退化为复制 URL，供投屏 App 手动打开。DLNA 接收端只读取受名单成员授权的视频 artifact，不接触网易云 Cookie。
 
 同一区域的实验按钮使用一个不可见但实际挂载媒体 URL 的 `<video>`：优先调用 `HTMLMediaElement.remote.prompt()`，Safari 下退回 `webkitShowPlaybackTargetPicker()`。调用直接发生在按钮点击栈中，以保留浏览器要求的瞬时用户激活；前端监听 Remote Playback 的 `connecting/connect/disconnect` 事件更新提示。此入口只委托浏览器打开设备列表，不直接实现 SSDP、DLNA SOAP 或设备发现。
 

@@ -79,6 +79,10 @@ class NeteaseClient:
     def login_with_captcha(
         self, phone: str, captcha: str, country_code: str = "86"
     ) -> dict[str, Any]:
+        # The current /api route uses网易云's private encrypt-fetch protocol
+        # (and anti-cheat token).  Until that browser-only handshake is
+        # available server-side, retain the compatible legacy weapi fallback;
+        # QR login below uses the public current-web endpoints instead.
         data = self.weapi(
             "/weapi/login/cellphone",
             {
@@ -94,9 +98,79 @@ class NeteaseClient:
         self._save_cookies()
         return data
 
+    def qr_login_start(self, *, user_agent: str = "") -> dict[str, str]:
+        """Create a QR login challenge using the current web login API."""
+        headers = {"x-loginmethod": "QrCode"}
+        if user_agent:
+            headers["User-Agent"] = user_agent[:512]
+        data = self.weapi(
+            "/weapi/login/qrcode/unikey",
+            {"type": "1", "noCheckToken": "true"},
+            extra_headers=headers,
+        )
+        self._require_code(data)
+        key = str(data.get("unikey") or "").strip()
+        if not key:
+            raise NeteaseError("网易云没有返回扫码登录凭证", code="qr_key_missing", detail=data)
+        return {"unikey": key}
+
+    def qr_login_poll(
+        self,
+        key: str,
+        chain_id: str,
+        *,
+        secure_captcha: Any = True,
+        yd_device_token: str = "",
+        user_agent: str = "",
+    ) -> dict[str, Any]:
+        """Poll a web QR login challenge.
+
+        The current web client treats 800/801/802/803 as QR state codes, so
+        these are returned to the caller instead of being raised as errors.
+        """
+        data = {"type": "1", "noCheckToken": "true", "key": key}
+        if secure_captcha is not None:
+            data["secureCaptcha"] = secure_captcha
+        # The web client includes this field even when fingerprint generation
+        # fails; retaining it keeps the encrypted payload shape compatible.
+        data["ydDeviceToken"] = yd_device_token
+        extra_headers = {
+            "x-loginmethod": "QrCode",
+            "x-login-chain-id": chain_id,
+        }
+        if user_agent:
+            extra_headers["User-Agent"] = user_agent[:512]
+        response = self.weapi(
+            "/weapi/login/qrcode/client/login",
+            data,
+            extra_headers=extra_headers,
+        )
+        code = response.get("code")
+        if code == 803:
+            self._save_cookies()
+        elif code not in {800, 801, 802, 803, 810, 811, 8821}:
+            self._require_code(response)
+        return response
+
+    @staticmethod
+    def qr_login_url(key: str, chain_id: str) -> str:
+        return (
+            f"{BASE_URL}/st/platform/scanlogin?codekey={key}"
+            f"&chainId={chain_id}&hdw_device=web&hdw_appid=web&hitExp=1"
+        )
+
     def account_status(self) -> dict[str, Any]:
         try:
-            data = self._get_json("/api/nuser/account/get")
+            try:
+                data = self.weapi(
+                    "/weapi/w/nuser/account/get",
+                    {"noCheckToken": "true"},
+                )
+            except NeteaseError:
+                try:
+                    data = self._get_json("/api/w/nuser/account/get")
+                except NeteaseError:
+                    data = self._get_json("/api/nuser/account/get")
         except NeteaseError:
             return {"logged_in": False, "profile": None}
         profile = data.get("profile")
@@ -122,6 +196,30 @@ class NeteaseClient:
         self._require_code(data)
         songs = ((data.get("result") or {}).get("songs") or [])
         return [normalize_song(song) for song in songs]
+
+    def search_users(self, query: str, limit: int = 12) -> list[dict[str, Any]]:
+        """Search NetEase web users using the same type=1002 endpoint as the web UI."""
+        data = self.weapi(
+            "/weapi/cloudsearch/get/web",
+            {
+                "s": query,
+                "type": "1002",
+                "offset": "0",
+                "total": "true",
+                "limit": str(limit),
+            },
+        )
+        self._require_code(data)
+        profiles = ((data.get("result") or {}).get("userprofiles") or [])
+        return [normalize_user(profile) for profile in profiles if isinstance(profile, dict)]
+
+    def user_detail(self, user_id: int) -> dict[str, Any]:
+        data = self._get_json("/api/user/detail", params={"uid": str(user_id)})
+        self._require_code(data)
+        profile = data.get("profile")
+        if not isinstance(profile, dict):
+            raise NeteaseError("没有找到该网易云用户", code="user_not_found")
+        return normalize_user(profile)
 
     def song_detail(self, song_id: int) -> dict[str, Any]:
         data = self._get_json(
@@ -182,7 +280,10 @@ class NeteaseClient:
         payload = dict(payload)
         payload.setdefault("csrf_token", self.session.cookies.get("__csrf", ""))
         body = weapi_payload(payload)
-        return self._post_json(path, data=body, headers=extra_headers)
+        headers = {"x-os": "web", "x-channelsource": "undefined"}
+        if extra_headers:
+            headers.update(extra_headers)
+        return self._post_json(path, data=body, headers=headers)
 
     def stream(self, url: str, *, headers: dict[str, str] | None = None) -> requests.Response:
         try:
@@ -304,4 +405,14 @@ def normalize_song(song: dict[str, Any]) -> dict[str, Any]:
         "fee": song.get("fee", privilege.get("fee")),
         "copyright": song.get("copyright"),
         "source": song,
+    }
+
+
+def normalize_user(profile: dict[str, Any]) -> dict[str, Any]:
+    user_id = profile.get("userId") or profile.get("id")
+    return {
+        "userId": int(user_id) if str(user_id or "").isdigit() else None,
+        "nickname": str(profile.get("nickname") or "网易云用户"),
+        "avatarUrl": str(profile.get("avatarUrl") or profile.get("avatarImgIdStr") or ""),
+        "signature": str(profile.get("signature") or ""),
     }
