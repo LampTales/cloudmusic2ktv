@@ -88,11 +88,11 @@ function showSong(song, local = null, shouldScroll = true) {
 
 function updateCastSongTarget() {
   if (!selectedSong) return;
-  $("#castSongCover").src = selectedSong.cover_url || "";
-  $("#castSongTitle").textContent = `${selectedSong.name} — ${selectedSong.artist}`;
-  $("#castSongMeta").textContent = `ID ${selectedSong.id} · 正在检查服务器本地视频`;
-  $("#castSongState").textContent = "正在检查";
-  $("#castMissing").textContent = "正在检查这首歌是否已有完整视频…";
+  const summary = $("#videoSummaryStatus");
+  summary.dataset.status = "checking";
+  $("#videoSummaryTitle").textContent = "正在检查";
+  $("#videoSummaryMessage").textContent = "正在扫描本地成品";
+  $("#castMissingText").textContent = "正在扫描这首歌的本地视频";
   $("#castMissing").classList.remove("hidden");
   $("#castControls").classList.add("hidden");
   selectedSongVideos = [];
@@ -116,11 +116,13 @@ async function refreshSelectedVideoStatus() {
 function applyCastStatus(local) {
   selectedSongVideos = Array.isArray(local?.videos) ? local.videos : [];
   const ready = Boolean(local?.ready && selectedSongVideos.length);
-  $("#castSongState").textContent = ready ? `已有 ${selectedSongVideos.length} 个` : "尚无视频";
-  $("#castSongMeta").textContent = ready
-    ? `${selectedSong.artist} · 选择一个本地版本发送给投屏应用`
-    : `${selectedSong.artist} · ${local?.message || "本地还没有完整视频"}`;
-  $("#castMissing").textContent = local?.message || "本地还没有这首歌的完整视频";
+  const summary = $("#videoSummaryStatus");
+  summary.dataset.status = ready ? "ready" : local?.status === "error" ? "error" : "missing";
+  $("#videoSummaryTitle").textContent = ready ? `已有 ${selectedSongVideos.length} 个` : "暂无视频";
+  $("#videoSummaryMessage").textContent = ready
+    ? "可以直接播放、投屏或下载"
+    : local?.message || "制作完成后会显示在这里";
+  $("#castMissingText").textContent = local?.message || "完成素材准备和画面设置后即可生成";
   $("#castMissing").classList.toggle("hidden", ready);
   $("#castControls").classList.toggle("hidden", !ready);
 
@@ -308,22 +310,7 @@ function downloadCastVideo() {
 
 function updateVideoSongTarget(inputPending = false) {
   if (!selectedSong) return;
-  $("#videoSongCover").src = selectedSong.cover_url;
-  $("#videoSongTitle").textContent = `${selectedSong.name} — ${selectedSong.artist}`;
-  $("#videoSongMeta").textContent = `${selectedSong.album} · ID ${selectedSong.id}`;
-  const state = $("#videoSongState");
-  state.classList.toggle("pending", inputPending);
-  const castState = $("#castSongState");
-  castState.classList.toggle("pending", inputPending);
-  if (inputPending) {
-    state.textContent = "输入尚未应用";
-    castState.textContent = "输入尚未应用";
-    $("#videoSongHint").textContent = "请点击 02 区的“读取”；读取成功后，这里才会切换到输入框中的歌曲。";
-  } else {
-    state.textContent = "已同步 02 区";
-    castState.textContent = selectedSongVideos.length ? `已有 ${selectedSongVideos.length} 个` : "正在检查";
-    $("#videoSongHint").textContent = "04 区跟随 02 区最后一次成功读取的歌曲；仅修改输入框不会切换歌曲。";
-  }
+  $("#selectionPending").classList.toggle("hidden", !inputPending);
 }
 
 async function refreshSelectedLocalStatus() {
@@ -343,6 +330,7 @@ function applyLocalStatus(local) {
   selectedSongLocal = local || {status: "missing", ready: false, message: "本地没有素材"};
   const box = $("#materialStatus");
   box.dataset.status = selectedSongLocal.status;
+  $("#builderMaterial").dataset.status = selectedSongLocal.status;
   const titles = {
     checking: "正在检查共享素材",
     missing: "尚未下载",
@@ -353,8 +341,12 @@ function applyLocalStatus(local) {
   };
   $("#materialStatusTitle").textContent = selectedSongLocal.title || titles[selectedSongLocal.status] || "共享素材状态";
   $("#materialStatusMessage").textContent = selectedSongLocal.message || "";
+  $("#builderMaterialTitle").textContent = selectedSongLocal.title || titles[selectedSongLocal.status] || "歌曲素材";
+  $("#builderMaterialMessage").textContent = selectedSongLocal.message || "准备音频、封面和歌词时间轴";
   const download = $("#download");
-  download.textContent = selectedSongLocal.ready ? "重新下载素材" : "下载全部素材";
+  download.textContent = selectedSongLocal.ready ? "重新下载素材" : "下载歌曲素材";
+  download.classList.toggle("primary", !selectedSongLocal.ready);
+  download.classList.toggle("secondary", selectedSongLocal.ready);
   download.disabled = selectedSongLocal.status === "downloading" || selectedSongLocal.status === "checking";
   $("#refreshPreview").disabled = !selectedSongLocal.ready;
   if (selectedSongLocal.ready) {
@@ -373,13 +365,74 @@ function applyLocalStatus(local) {
 
 function updateRenderAvailability() {
   const button = $("#renderVideo");
+  const badge = $("#builderStateBadge");
   const available = Boolean(selectedSong && selectedSongLocal.ready && accountLoggedIn);
   button.disabled = !available;
-  if (!selectedSong) $("#renderAvailability").textContent = "请先选择歌曲";
-  else if (!selectedSongLocal.ready) $("#renderAvailability").textContent = "请先下载完整的共享素材";
-  else if (!accountLoggedIn) $("#renderAvailability").textContent = "登录后可以提交视频任务";
-  else $("#renderAvailability").textContent = "已可加入共享生成队列";
+  badge.classList.toggle("ready", Boolean(selectedSong && selectedSongLocal.ready));
+  if (!selectedSong) {
+    $("#renderAvailability").textContent = "请先选择歌曲";
+    badge.textContent = "等待选择歌曲";
+  } else if (!selectedSongLocal.ready) {
+    $("#renderAvailability").textContent = "请先下载完整的歌曲素材";
+    badge.textContent = "素材未准备";
+  } else if (!accountLoggedIn) {
+    $("#renderAvailability").textContent = "登录后可以提交视频任务";
+    badge.textContent = "素材已就绪";
+  } else {
+    $("#renderAvailability").textContent = "已可加入共享生成队列";
+    badge.textContent = "可以制作";
+  }
 }
+
+function setFinderMode(mode) {
+  const searchMode = mode === "search";
+  $("#searchModeSearch").classList.toggle("active", searchMode);
+  $("#searchModeId").classList.toggle("active", !searchMode);
+  $("#searchModeSearch").setAttribute("aria-selected", String(searchMode));
+  $("#searchModeId").setAttribute("aria-selected", String(!searchMode));
+  $("#finderSearchPanel").classList.toggle("hidden", !searchMode);
+  $("#finderIdPanel").classList.toggle("hidden", searchMode);
+  const target = searchMode ? $("#searchInput") : $("#songInput");
+  requestAnimationFrame(() => target.focus());
+}
+
+function openAccountModal() {
+  $("#accountModal").classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  $(accountLoggedIn ? "#logout" : "#phone").focus();
+}
+
+function closeAccountModal() {
+  $("#accountModal").classList.add("hidden");
+  document.body.classList.remove("modal-open");
+  $("#accountPill").focus();
+}
+
+function setupSectionNavigation() {
+  const links = [...document.querySelectorAll(".page-nav a")];
+  const sections = links
+    .map(link => ({link, section: document.getElementById(link.getAttribute("href").slice(1))}))
+    .filter(item => item.section);
+  const update = () => {
+    const marker = window.scrollY + $(".topbar").getBoundingClientRect().height + 36;
+    let active = sections[0];
+    for (const item of sections) {
+      if (item.section.classList.contains("hidden")) continue;
+      if (item.section.offsetTop <= marker) active = item;
+    }
+    for (const item of sections) item.link.classList.toggle("active", item === active);
+  };
+  window.addEventListener("scroll", update, {passive: true});
+  window.addEventListener("resize", update);
+  requestAnimationFrame(update);
+}
+
+$("#searchModeSearch").addEventListener("click", () => setFinderMode("search"));
+$("#searchModeId").addEventListener("click", () => setFinderMode("id"));
+$("#accountPill").addEventListener("click", openAccountModal);
+$("#closeAccountModal").addEventListener("click", closeAccountModal);
+$("#accountModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeAccountModal(); });
+$("#goToBuilder").addEventListener("click", () => $("#videoBuilder").scrollIntoView({behavior: "smooth", block: "start"}));
 
 $("#sendCaptcha").addEventListener("click", async (event) => {
   const button = event.currentTarget;
@@ -402,7 +455,7 @@ $("#login").addEventListener("click", async (event) => {
   try {
     await api("/api/auth/login", {method: "POST", body: JSON.stringify({phone: $("#phone").value, captcha: $("#captcha").value, country_code: $("#countryCode").value})});
     $("#phone").value = ""; $("#captcha").value = "";
-    notify("登录成功"); await refreshStatus();
+    notify("登录成功"); await refreshStatus(); closeAccountModal();
   } catch (error) { notify(error.message, true); }
   finally { busy(button, false); }
 });
@@ -595,9 +648,12 @@ async function refreshQueue() {
     const data = await api("/api/video/queue", {headers: {}, credentials: "omit"});
     showQueue(data.queue);
   } catch {
-    $("#queueIdle").textContent = "暂时无法取得队列状态";
+    $("#queueIdle strong").textContent = "暂时无法取得队列状态";
+    $("#queueIdle span:not(.dock-mark)").textContent = "请检查服务是否正常运行";
     $("#queueIdle").classList.remove("hidden");
     $("#queueCurrent").classList.add("hidden");
+    $("#queueRecent").classList.add("hidden");
+    $("#queueProgressFill").style.width = "0%";
   } finally {
     queueTimer = setTimeout(refreshQueue, 1500);
   }
@@ -607,7 +663,9 @@ function showQueue(queue) {
   latestQueue = queue;
   const current = queue.current;
   $("#queueCount").textContent = `等待 ${queue.queued_count || 0}`;
-  $("#queueIdle").classList.toggle("hidden", Boolean(current));
+  $("#queueIdle strong").textContent = "当前没有生成任务";
+  $("#queueIdle span:not(.dock-mark)").textContent = "生成进度会显示在这里";
+  $("#queueIdle").classList.toggle("hidden", Boolean(current || queue.recent));
   $("#queueCurrent").classList.toggle("hidden", !current);
   if (current) {
     const song = current.song || {};
@@ -618,6 +676,8 @@ function showQueue(queue) {
     const percent = Number(current.progress || 0);
     $("#queuePercent").textContent = `${percent}%`;
     $("#queueProgressFill").style.width = `${percent}%`;
+  } else {
+    $("#queueProgressFill").style.width = "0%";
   }
 
   const recent = $("#queueRecent");
@@ -647,7 +707,7 @@ function showQueue(queue) {
     link.textContent = "打开视频";
     recent.append(link);
   }
-  recent.classList.remove("hidden");
+  recent.classList.toggle("hidden", Boolean(current));
   if (!$("#queueModal").classList.contains("hidden")) renderQueueDetails();
 }
 
@@ -701,9 +761,11 @@ $("#closeQueueModal").addEventListener("click", closeQueueModal);
 $("#queueModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeQueueModal(); });
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !$("#queueModal").classList.contains("hidden")) closeQueueModal();
+  else if (event.key === "Escape" && !$("#accountModal").classList.contains("hidden")) closeAccountModal();
 });
 
 updateConditionalOptions();
+setupSectionNavigation();
 const castRemote = $("#castMediaElement").remote;
 if (castRemote) {
   castRemote.addEventListener("connecting", () => updateBrowserCastHelp("浏览器正在连接远程播放设备…"));
@@ -719,5 +781,7 @@ $("#castHelp").textContent = typeof navigator.share === "function"
 refreshStatus();
 refreshQueue();
 const rememberedSongId = localStorage.getItem("cloudmusic2ktv.selectedSongId");
-if (rememberedSongId) $("#songInput").value = rememberedSongId;
-inspectSong($("#songInput").value, false);
+if (rememberedSongId) {
+  $("#songInput").value = rememberedSongId;
+  inspectSong(rememberedSongId, false);
+}

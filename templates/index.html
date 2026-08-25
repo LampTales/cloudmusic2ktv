@@ -2,137 +2,179 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CloudMusic2KTV · 素材与视频</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#242424">
+  <title>CloudMusic2KTV</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#finder" aria-label="CloudMusic2KTV 首页">
+        <span class="brand-mark" aria-hidden="true">K</span>
+        <span>CloudMusic<span>2KTV</span></span>
+      </a>
+      <nav class="page-nav" aria-label="页面导航">
+        <a class="active" href="#finder">检索歌曲</a>
+        <a href="#songPreview">当前歌曲</a>
+        <a href="#castPanel">本地视频</a>
+        <a href="#videoBuilder">视频制作</a>
+      </nav>
+      <button id="accountPill" class="account-pill" type="button" aria-haspopup="dialog">
+        <span class="dot"></span><span>检查登录状态…</span>
+      </button>
+    </div>
+  </header>
+
   <main class="shell">
-    <header class="hero">
-      <div>
-        <p class="eyebrow">CloudMusic2KTV · PERSONAL SINGING VIDEO</p>
-        <h1>从一首歌，到一支可以跟唱的视频。</h1>
-        <p class="lede">取得音频、封面和时间轴，预览画面样式，然后生成可直接播放的 KTV 视频。</p>
+    <section id="finder" class="panel finder-card scroll-target" aria-labelledby="finderTitle">
+      <div class="section-heading">
+        <div class="heading-copy">
+          <p class="eyebrow">FIND A SONG</p>
+          <h2 id="finderTitle">检索歌曲</h2>
+          <p class="section-guide">输入关键词开始搜索，或切换到 ID / 链接读取指定歌曲。</p>
+        </div>
+        <div class="mode-switch" role="tablist" aria-label="找歌方式">
+          <button id="searchModeSearch" class="mode-button active" type="button" role="tab" aria-selected="true" aria-controls="finderSearchPanel">搜索歌曲</button>
+          <button id="searchModeId" class="mode-button" type="button" role="tab" aria-selected="false" aria-controls="finderIdPanel">ID / 链接</button>
+        </div>
       </div>
-      <div id="accountPill" class="account-pill"><span class="dot"></span><span>检查登录状态…</span></div>
-    </header>
 
-    <section class="grid">
-      <article class="card auth-card">
-        <div class="card-title">
-          <span class="step">01</span>
-          <div><h2>网易云账号</h2><p>手机号 + 短信验证码</p></div>
-        </div>
-        <div id="loggedOut">
-          <label>国家/地区代码</label>
-          <div class="phone-row">
-            <input id="countryCode" value="86" inputmode="numeric" aria-label="国家地区代码">
-            <input id="phone" placeholder="手机号" inputmode="tel" autocomplete="tel">
-          </div>
-          <button id="sendCaptcha" class="secondary">获取验证码</button>
-          <label for="captcha">短信验证码</label>
-          <input id="captcha" placeholder="请输入验证码" inputmode="numeric" autocomplete="one-time-code">
-          <button id="login" class="primary">登录账号</button>
-          <p class="fineprint">手机号与验证码不会写入磁盘；登录后的网易云 Cookie 按当前浏览器隔离保存在服务器 <code>instance/sessions/</code>。</p>
-        </div>
-        <div id="loggedIn" class="hidden logged-in">
-          <div class="avatar-wrap"><img id="avatar" alt="账号头像"></div>
-          <div><strong id="nickname"></strong><p>已可使用此账号的网页播放权益</p></div>
-          <button id="logout" class="text-button">退出</button>
-        </div>
-      </article>
-
-      <article class="card song-card">
-        <div class="card-title">
-          <span class="step">02</span>
-          <div><h2>选择歌曲</h2><p>ID、歌曲链接，或按名称搜索</p></div>
-        </div>
-        <label for="songInput">歌曲 ID / 网易云链接</label>
-        <div class="inline-row">
-          <input id="songInput" value="3346334398" placeholder="例如 3346334398">
-          <button id="inspect" class="secondary compact">读取</button>
-        </div>
-        <div class="divider"><span>或者</span></div>
-        <label for="searchInput">歌名与歌手</label>
-        <div class="inline-row">
-          <input id="searchInput" placeholder="例如：歌名 歌手">
-          <button id="search" class="secondary compact">搜索</button>
+      <div id="finderSearchPanel" class="finder-panel" role="tabpanel" aria-labelledby="searchModeSearch">
+        <label class="visually-hidden" for="searchInput">搜索关键词</label>
+        <div class="search-row">
+          <input id="searchInput" placeholder="输入关键词" autocomplete="off">
+          <button id="search" class="primary compact" type="button">搜索</button>
         </div>
         <div id="searchResults" class="results hidden"></div>
-      </article>
-    </section>
+      </div>
 
-    <section id="songPreview" class="preview card hidden">
-      <img id="cover" alt="歌曲封面">
-      <div class="song-copy">
-        <p class="eyebrow">READY TO FETCH</p>
-        <h2 id="songName"></h2>
-        <p id="songMeta"></p>
-        <div id="materialStatus" class="material-status">
-          <span id="materialStatusDot" class="material-dot"></span>
-          <div><strong id="materialStatusTitle">正在检查共享素材</strong><p id="materialStatusMessage"></p></div>
-        </div>
-        <div class="actions">
-          <label class="quality-label">音质
-            <select id="quality">
-              <option value="standard">标准</option>
-              <option value="higher">较高</option>
-              <option value="exhigh" selected>极高</option>
-              <option value="lossless">无损</option>
-              <option value="hires">Hi-Res</option>
-            </select>
-          </label>
-          <button id="download" class="primary download-button">下载全部素材</button>
+      <div id="finderIdPanel" class="finder-panel hidden" role="tabpanel" aria-labelledby="searchModeId">
+        <label class="visually-hidden" for="songInput">歌曲 ID 或网易云链接</label>
+        <div class="search-row">
+          <input id="songInput" placeholder="输入歌曲 ID 或网易云链接" inputmode="url" autocomplete="off">
+          <button id="inspect" class="primary compact" type="button">读取</button>
         </div>
       </div>
     </section>
 
-    <section id="castPanel" class="cast-card card hidden">
-      <div class="card-title cast-heading">
-        <span class="step">03</span>
-        <div><h2>投屏已有视频</h2><p>只检查服务器本地已经生成的 MP4 视频</p></div>
+    <section id="songPreview" class="current-song panel hidden scroll-target" aria-labelledby="songName">
+      <div class="current-cover-wrap">
+        <img id="cover" alt="当前歌曲封面">
+        <span class="current-label">当前歌曲</span>
       </div>
-      <div class="cast-song-target" aria-live="polite">
-        <img id="castSongCover" alt="当前投屏歌曲封面">
-        <div class="cast-song-copy">
-          <span class="target-label">当前歌曲</span>
-          <strong id="castSongTitle">尚未选择歌曲</strong>
-          <span id="castSongMeta">等待检查本地视频</span>
+      <div class="current-song-copy">
+        <div class="current-title-row">
+          <div>
+            <p class="eyebrow">NOW SELECTED</p>
+            <h2 id="songName"></h2>
+            <p id="songMeta" class="song-meta"></p>
+          </div>
+          <span id="selectionPending" class="pending-pill hidden">输入尚未应用</span>
         </div>
-        <span id="castSongState" class="target-state">正在检查</span>
+        <div class="song-status-grid">
+          <div id="materialStatus" class="status-card" data-status="checking">
+            <span id="materialStatusDot" class="status-dot"></span>
+            <div>
+              <span class="status-label">歌曲素材</span>
+              <strong id="materialStatusTitle">正在检查</strong>
+              <p id="materialStatusMessage"></p>
+            </div>
+          </div>
+          <div id="videoSummaryStatus" class="status-card" data-status="checking">
+            <span class="status-dot"></span>
+            <div>
+              <span class="status-label">已生成视频</span>
+              <strong id="videoSummaryTitle">正在检查</strong>
+              <p id="videoSummaryMessage">正在扫描本地成品</p>
+            </div>
+          </div>
+        </div>
       </div>
-      <div id="castMissing" class="cast-missing">正在检查这首歌是否已有完整视频…</div>
+    </section>
+
+    <section id="castPanel" class="panel cast-card hidden scroll-target" aria-labelledby="castTitle">
+      <div class="section-heading compact-heading">
+        <div class="heading-copy">
+          <p class="eyebrow">LOCAL VIDEOS</p>
+          <h2 id="castTitle">本地视频</h2>
+        </div>
+      </div>
+
+      <div id="castMissing" class="empty-state">
+        <div class="empty-icon" aria-hidden="true">▶</div>
+        <div>
+          <strong>正在检查本地视频</strong>
+          <p id="castMissingText">稍候片刻</p>
+        </div>
+        <button id="goToBuilder" class="secondary compact" type="button">去制作视频 ↓</button>
+      </div>
+
       <div id="castControls" class="cast-controls hidden">
-        <label for="castVideoSelect">选择本地视频
+        <label for="castVideoSelect">本地视频版本
           <select id="castVideoSelect"></select>
         </label>
-        <button id="openCastApp" class="primary cast-button" type="button">使用投屏应用打开</button>
-        <button id="browserCast" class="secondary cast-button browser-cast-button" type="button">尝试浏览器投屏 · 实验</button>
-        <button id="downloadCastVideo" class="secondary cast-button" type="button">下载视频到本地</button>
-        <a id="castDirectLink" class="cast-direct-link" target="_blank" rel="noopener">先测试播放</a>
+        <div class="cast-actions">
+          <a id="castDirectLink" class="primary action-link" target="_blank" rel="noopener">播放</a>
+          <button id="openCastApp" class="secondary" type="button">投屏</button>
+          <button id="downloadCastVideo" class="secondary" type="button">下载</button>
+          <button id="browserCast" class="secondary experimental-button" type="button" title="实验性功能">浏览器投屏</button>
+        </div>
       </div>
-      <p id="castHelp" class="fineprint cast-help">点击后在系统分享菜单中选择 BubbleUPnP，再由应用选择局域网内的播放设备。</p>
-      <p id="browserCastHelp" class="fineprint cast-help browser-cast-help">实验按钮会请求浏览器显示其原生远程播放设备列表；能否发现 DLNA 设备由浏览器和手机系统决定。</p>
+      <div class="cast-notes">
+        <p id="castHelp" class="helper-text">优先通过系统分享菜单发送到投屏应用。</p>
+        <p id="browserCastHelp" class="helper-text"></p>
+      </div>
       <video id="castMediaElement" class="cast-media-probe" preload="none" playsinline x-webkit-airplay="allow" aria-hidden="true"></video>
     </section>
 
-    <section id="videoBuilder" class="video-builder card">
-      <div class="card-title video-heading">
-        <span class="step">04</span>
-        <div><h2>生成 KTV 视频</h2><p>设置改变后会使用同一套 Python 渲染器更新预览</p></div>
-      </div>
-      <div class="video-song-target" aria-live="polite">
-        <img id="videoSongCover" alt="当前视频歌曲封面">
-        <div class="video-song-copy">
-          <span class="target-label">当前视频歌曲</span>
-          <strong id="videoSongTitle">尚未选择歌曲</strong>
-          <span id="videoSongMeta">请先在 02 区读取歌曲或点击搜索结果</span>
+    <section id="videoBuilder" class="panel builder-card scroll-target" aria-labelledby="builderTitle">
+      <div class="section-heading builder-heading">
+        <div class="heading-copy">
+          <p class="eyebrow">KTV STUDIO</p>
+          <h2 id="builderTitle">视频制作</h2>
         </div>
-        <span id="videoSongState" class="target-state">等待选择</span>
+        <span id="builderStateBadge" class="state-badge">等待选择歌曲</span>
       </div>
-      <p id="videoSongHint" class="selection-hint">04 区跟随 02 区最后一次成功读取的歌曲；仅修改输入框不会切换歌曲。</p>
+
+      <div id="builderMaterial" class="material-prep" data-status="missing">
+        <div class="material-prep-copy">
+          <span class="status-label">制作素材</span>
+          <strong id="builderMaterialTitle">尚未选择歌曲</strong>
+          <p id="builderMaterialMessage">先在上方选择一首歌曲</p>
+        </div>
+        <label class="quality-control" for="quality">下载音质
+          <select id="quality">
+            <option value="standard">标准</option>
+            <option value="higher">较高</option>
+            <option value="exhigh" selected>极高</option>
+            <option value="lossless">无损</option>
+            <option value="hires">Hi-Res</option>
+          </select>
+        </label>
+        <button id="download" class="primary material-button" type="button" disabled>下载歌曲素材</button>
+      </div>
+
       <div class="builder-layout">
+        <div class="preview-panel">
+          <div class="preview-stage">
+            <img id="videoPreviewImage" alt="KTV 视频画面预览">
+            <div id="previewPlaceholder">
+              <span class="preview-symbol" aria-hidden="true">K</span>
+              <span>准备素材后生成真实画面预览</span>
+            </div>
+          </div>
+          <div class="preview-actions">
+            <span id="previewMeta">预览尚未生成</span>
+            <button id="refreshPreview" class="secondary compact" type="button" disabled>更新预览</button>
+          </div>
+        </div>
+
         <div class="video-options">
+          <div class="options-heading">
+            <strong>画面设置</strong>
+            <span>修改后自动更新预览</span>
+          </div>
           <div class="option-grid">
             <label>歌词显示
               <select id="lyricMode">
@@ -141,12 +183,12 @@
                 <option value="romanization">原文 + 罗马音</option>
               </select>
             </label>
-            <label>背景生成方式
+            <label>背景
               <select id="backgroundMode">
                 <option value="blur">封面模糊并压暗</option>
-                <option value="gradient">提取封面色生成渐变</option>
+                <option value="gradient">封面色渐变</option>
                 <option value="solid">纯色背景</option>
-                <option value="custom">自定义背景图片</option>
+                <option value="custom">自定义图片</option>
               </select>
             </label>
             <label id="backgroundColorWrap" class="hidden">背景颜色
@@ -171,75 +213,96 @@
                 <option value="720p" selected>1280 × 720</option>
               </select>
             </label>
-            <label>视频画质
-              <select id="videoQuality">
-                <option value="high">高画质 · 较慢</option>
-                <option value="balanced">平衡</option>
-                <option value="compact" selected>较小文件 · 较快</option>
-              </select>
-            </label>
           </div>
-          <div class="toggle-list">
-            <label class="toggle"><input id="spectrumEnabled" type="checkbox" checked><span>显示动态频谱</span></label>
-            <label class="range-label">频谱强度 <input id="spectrumOpacity" type="range" min="10" max="100" value="65"><output id="spectrumValue">65%</output></label>
-            <label class="toggle"><input id="openingEnabled" type="checkbox" checked><span>自动开场动画</span></label>
-            <label class="toggle"><input id="interludeEnabled" type="checkbox" checked><span>间奏结束前 4 秒显示歌词提示</span></label>
-          </div>
-          <p class="fineprint">相邻歌词开始时间超过 15 秒时视为间奏；上一句扫色最长 8 秒。</p>
-        </div>
-        <div class="preview-panel">
-          <div class="preview-stage">
-            <img id="videoPreviewImage" alt="视频画面预览">
-            <div id="previewPlaceholder">请先选择歌曲并准备共享素材</div>
-          </div>
-          <div class="preview-actions">
-            <span id="previewMeta">预览尚未生成</span>
-            <button id="refreshPreview" class="secondary compact" disabled>更新预览</button>
-          </div>
+
+          <details class="advanced-options">
+            <summary>高级设置</summary>
+            <div class="advanced-content">
+              <label>视频画质
+                <select id="videoQuality">
+                  <option value="high">高画质 · 较慢</option>
+                  <option value="balanced">平衡</option>
+                  <option value="compact" selected>较小文件 · 较快</option>
+                </select>
+              </label>
+              <label class="toggle"><input id="spectrumEnabled" type="checkbox" checked><span>显示动态频谱</span></label>
+              <label class="range-label">频谱强度 <input id="spectrumOpacity" type="range" min="10" max="100" value="65"><output id="spectrumValue">65%</output></label>
+              <label class="toggle"><input id="openingEnabled" type="checkbox" checked><span>自动开场动画</span></label>
+              <label class="toggle"><input id="interludeEnabled" type="checkbox" checked><span>间奏结束前显示歌词提示</span></label>
+            </div>
+          </details>
         </div>
       </div>
+
       <div class="render-row">
-        <button id="renderVideo" class="primary render-button" disabled>加入生成队列</button>
         <div class="render-submit-copy">
-          <strong id="renderAvailability">请选择歌曲并准备共享素材</strong>
-          <span>提交时需要登录；加入队列后任务不再绑定账号。</span>
+          <strong id="renderAvailability">请先选择歌曲并准备素材</strong>
+          <span>生成任务将进入共享队列</span>
         </div>
+        <button id="renderVideo" class="primary render-button" type="button" disabled>加入生成队列</button>
       </div>
     </section>
+  </main>
 
-    <section id="queuePanel" class="queue-card card" aria-live="polite">
-      <div class="queue-heading">
-        <div class="card-title">
-          <span class="step">Q</span>
-          <div><h2>共享生成队列</h2><p>任务按提交顺序单线程生成，不记录提交者身份</p></div>
-        </div>
-        <button id="queueCount" class="queue-count" type="button" aria-haspopup="dialog">等待 0</button>
+  <aside id="queuePanel" class="task-dock" aria-live="polite">
+    <div class="task-progress-line"><div id="queueProgressFill"></div></div>
+    <div class="task-dock-inner">
+      <div id="queueIdle" class="queue-idle">
+        <span class="dock-mark" aria-hidden="true">K</span>
+        <div><strong>当前没有生成任务</strong><span>生成进度会显示在这里</span></div>
       </div>
-      <div id="queueIdle" class="queue-idle">当前没有视频生成任务</div>
       <div id="queueCurrent" class="queue-current hidden">
         <img id="queueCover" alt="当前任务歌曲封面">
         <div class="queue-current-copy">
-          <span class="target-label">当前任务</span>
+          <span>正在生成</span>
           <strong id="queueSong"></strong>
-          <span id="queueMessage">正在准备</span>
+          <small id="queueMessage">正在准备</small>
         </div>
         <strong id="queuePercent">0%</strong>
-        <div class="progress-track queue-progress"><div id="queueProgressFill"></div></div>
       </div>
       <div id="queueRecent" class="queue-recent hidden"></div>
-    </section>
-    <div id="toast" role="status" aria-live="polite"></div>
-  </main>
+      <button id="queueCount" class="queue-count" type="button" aria-haspopup="dialog">等待 0</button>
+    </div>
+  </aside>
+
+  <div id="accountModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
+    <div class="modal-panel account-modal-panel">
+      <div class="modal-heading">
+        <div><p class="eyebrow">NETEASE ACCOUNT</p><h2 id="accountModalTitle">网易云账号</h2></div>
+        <button id="closeAccountModal" class="text-action modal-close" type="button" aria-label="关闭账号窗口">关闭</button>
+      </div>
+      <div id="loggedOut" class="account-form">
+        <p class="modal-lede">登录后可使用当前账号的网页播放权益下载素材并提交视频任务。</p>
+        <label>国家/地区代码</label>
+        <div class="phone-row">
+          <input id="countryCode" value="86" inputmode="numeric" aria-label="国家地区代码">
+          <input id="phone" placeholder="手机号" inputmode="tel" autocomplete="tel">
+        </div>
+        <button id="sendCaptcha" class="secondary" type="button">获取验证码</button>
+        <label for="captcha">短信验证码</label>
+        <input id="captcha" placeholder="请输入验证码" inputmode="numeric" autocomplete="one-time-code">
+        <button id="login" class="primary" type="button">登录账号</button>
+        <p class="helper-text privacy-note">手机号与验证码不会写入磁盘；登录 Cookie 按浏览器隔离保存在服务器本地。</p>
+      </div>
+      <div id="loggedIn" class="hidden logged-in">
+        <img id="avatar" alt="账号头像">
+        <div><strong id="nickname"></strong><p>网易云账号已连接</p></div>
+        <button id="logout" class="secondary compact" type="button">退出登录</button>
+      </div>
+    </div>
+  </div>
 
   <div id="queueModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="queueModalTitle">
     <div class="modal-panel">
       <div class="modal-heading">
-        <div><p class="eyebrow">GLOBAL RENDER QUEUE</p><h2 id="queueModalTitle">队列详情</h2></div>
-        <button id="closeQueueModal" class="text-button modal-close" type="button" aria-label="关闭队列详情">关闭</button>
+        <div><p class="eyebrow">RENDER QUEUE</p><h2 id="queueModalTitle">生成队列</h2></div>
+        <button id="closeQueueModal" class="text-action modal-close" type="button" aria-label="关闭队列详情">关闭</button>
       </div>
       <div id="queueDetailList" class="queue-detail-list"></div>
     </div>
   </div>
+
+  <div id="toast" role="status" aria-live="polite"></div>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
