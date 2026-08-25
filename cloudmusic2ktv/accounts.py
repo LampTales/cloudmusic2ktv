@@ -66,6 +66,18 @@ class WebsiteAccountStore:
             self._write(value)
             return self.public(account)
 
+    def validate_new_account(self, username: str, password: str) -> None:
+        """Validate local credentials before an external allowlist mutation."""
+        key = self._username_key(username)
+        if not USERNAME_PATTERN.fullmatch(username.strip()):
+            raise AccountError("网站用户名需要为 2～40 个不含空格的字符")
+        if len(password) < 6:
+            raise AccountError("网站密码至少需要 6 个字符")
+        with self._lock:
+            value = self._read()
+            if key in value["users"]:
+                raise AccountExists("网站用户名已存在")
+
     def authenticate(self, username: str, password: str) -> dict[str, Any] | None:
         key = self._username_key(username)
         with self._lock:

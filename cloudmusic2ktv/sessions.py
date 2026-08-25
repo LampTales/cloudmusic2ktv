@@ -26,6 +26,8 @@ class AuthSession:
     last_used_at: int
     profile: dict[str, Any] | None
     pending_qr: dict[str, Any] | None = None
+    csrf_token: str = ""
+    discard_cookies_on_error: bool = False
 
 
 class FileSessionStore:
@@ -70,6 +72,7 @@ class FileSessionStore:
                 "last_used_at": now,
                 "profile": None,
                 "pending_qr": None,
+                "csrf_token": secrets.token_urlsafe(32),
                 "cookies": [],
             }
 
@@ -88,9 +91,14 @@ class FileSessionStore:
                 last_used_at=int(record.get("last_used_at") or time.time()),
                 profile=record.get("profile") if isinstance(record.get("profile"), dict) else None,
                 pending_qr=record.get("pending_qr") if isinstance(record.get("pending_qr"), dict) else None,
+                csrf_token=str(record.get("csrf_token") or secrets.token_urlsafe(32)),
             )
             try:
                 yield session
+            except Exception:
+                if session.discard_cookies_on_error:
+                    client.session.cookies.clear()
+                raise
             finally:
                 now = int(time.time())
                 self._write(
@@ -101,6 +109,7 @@ class FileSessionStore:
                         "last_used_at": now if touch else session.last_used_at,
                         "profile": session.profile,
                         "pending_qr": session.pending_qr,
+                        "csrf_token": session.csrf_token,
                         "cookies": client.export_cookies(),
                     },
                 )

@@ -152,7 +152,7 @@ h2 { margin: 0; font-size: 24px; line-height: 1.25; letter-spacing: -.02em; }
 
 label { display: block; margin: 0; color: #555; font-size: 12px; font-weight: 700; }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
-input, select {
+input, select, textarea {
   width: 100%;
   min-height: 46px;
   margin-top: 8px;
@@ -163,6 +163,8 @@ input, select {
   border-radius: 8px;
   outline: none;
 }
+textarea { min-height: 110px; resize: vertical; font: inherit; line-height: 1.45; }
+input[type="file"] { padding: 9px; font-size: 11px; }
 input:hover, select:hover { border-color: #b8b8b8; }
 input:focus, select:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(236,65,65,.09); }
 button { min-height: 44px; border-radius: 8px; font-weight: 800; cursor: pointer; transition: background .15s, border-color .15s, color .15s, transform .15s; }
@@ -321,6 +323,26 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .phone-row { display: grid; grid-template-columns: 80px 1fr; gap: 9px; }
 .account-form > button { width: 100%; margin-top: 10px; }
 .account-form > label { margin-top: 14px; }
+#websiteLoginForm, #websiteRegisterForm { display: grid; gap: 10px; }
+#websiteLoginForm .modal-lede, #websiteRegisterForm .modal-lede { margin: 12px 0 6px; }
+#websiteLoginForm input, #websiteRegisterForm input { margin-top: 0; }
+#websiteLoginForm > button.primary, #websiteRegisterForm > button.primary { width: 100%; margin-top: 2px; }
+.auth-method-panel { display: grid; gap: 10px; margin-top: 14px; }
+.auth-method-panel > label { margin-top: 2px; }
+.auth-method-panel input { margin-top: 0; }
+.auth-method-panel > button.primary { width: 100%; margin-top: 2px; }
+.auth-method-panel > button.secondary { justify-self: start; }
+.auth-method-panel > div[id$="RegisterFields"], .auth-method-panel > div[id$="ReauthFields"] { display: grid; gap: 10px; }
+.auth-method-panel > div[id$="RegisterFields"] input, .auth-method-panel > div[id$="ReauthFields"] input { margin-top: 0; }
+.auth-method-panel > div[id$="RegisterFields"] > button.secondary, .auth-method-panel > div[id$="ReauthFields"] > button.secondary { justify-self: start; }
+.auth-alternate-row { display: flex; justify-content: flex-start; margin-top: 6px; }
+.cookie-import-fields { display: grid; gap: 9px; margin-top: 14px; }
+.cookie-import-fields label { margin-top: 4px; }
+.cookie-import-fields .helper-text { margin: 0; }
+.cookie-import-fields input, .cookie-import-fields textarea { margin-top: 0; }
+.security-hint { color: #8d6868; }
+.alternate-login-link { display: block; width: max-content; min-height: auto; margin: 0; padding: 4px 2px; text-decoration: underline; text-underline-offset: 3px; }
+.method-switch-link { justify-self: start; min-height: 34px; padding: 4px 2px; text-decoration: underline; text-underline-offset: 3px; }
 .qr-login-panel { margin: 14px 0 6px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; text-align: center; }
 .qr-login-panel img { display: block; width: 220px; height: 220px; margin: 0 auto 8px; image-rendering: pixelated; }
 .qr-login-panel p { margin: 6px 0; }
@@ -328,17 +350,21 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .account-mode-switch { display: flex; gap: 8px; margin: 18px 0 4px; }
 .account-mode-switch .mode-button { flex: 1; }
 .privacy-note { margin-top: 14px; }
-.logged-in { display: flex; align-items: center; gap: 14px; padding: 24px 0 4px; }
-.logged-in img { width: 54px; height: 54px; object-fit: cover; border-radius: 50%; }
-.logged-in div { flex: 1; min-width: 0; }
+.logged-in { display: grid; gap: 17px; padding: 24px 0 4px; }
+.logged-in-identity { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.logged-in img { width: 54px; height: 54px; flex: 0 0 auto; object-fit: cover; border-radius: 50%; }
+.logged-in-identity > div { min-width: 0; }
 .logged-in strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .logged-in p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.logged-in-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding-top: 13px; border-top: 1px solid var(--line); }
+.logged-in-actions .text-action { margin-right: auto; }
 .admin-section { padding-top: 18px; }
 .admin-section + .admin-section { margin-top: 18px; border-top: 1px solid var(--line); }
 .admin-role-label { display: flex; align-items: center; gap: 9px; margin-top: 12px; color: var(--muted); font-size: 12px; }
 .admin-role-label select { width: auto; min-height: 36px; }
 .admin-list { display: grid; gap: 8px; margin-top: 12px; }
 .admin-user-row { display: flex; align-items: center; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #fafafa; }
+.admin-user-row > button { flex: 0 0 auto; }
 .admin-user-row img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; background: #eee; }
 .admin-user-copy { min-width: 0; flex: 1; display: grid; gap: 3px; }
 .admin-user-copy strong, .admin-user-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -437,6 +463,13 @@ button:disabled { opacity: .48; cursor: not-allowed; }
   .queue-recent { justify-content: flex-start; }
   .queue-recent span { display: none; }
   .queue-count { padding: 6px 9px; }
+  .logged-in-actions { display: grid; grid-template-columns: 1fr 1fr; justify-content: stretch; }
+  .logged-in-actions .text-action { grid-column: 1 / -1; margin-right: 0; }
+  .logged-in-actions button { width: 100%; min-width: 0; }
+  .admin-user-row { flex-wrap: wrap; }
+  .admin-user-copy { flex-basis: calc(100% - 56px); }
+  .admin-user-row .admin-role-badge { margin-left: 46px; }
+  .admin-user-row > button { margin-left: auto; }
   .modal-backdrop { align-items: end; padding: 0; }
   .modal-panel { width: 100%; max-height: min(88vh, 720px); padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); border-radius: 14px 14px 0 0; }
   .queue-detail-row { grid-template-columns: 42px minmax(0, 1fr); }

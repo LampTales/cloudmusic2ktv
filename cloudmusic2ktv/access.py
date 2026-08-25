@@ -80,6 +80,8 @@ class AllowlistStore:
             raise AllowlistError("操作者 ID 无效")
         with self._lock:
             value = self._read()
+            if user_id in value["users"]:
+                raise AllowlistError("该用户已经在允许名单中")
             entry = self._entry(profile, role, actor_id)
             value["users"][user_id] = entry
             self._write(value)

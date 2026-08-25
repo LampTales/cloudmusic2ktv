@@ -13,7 +13,13 @@ let lastQueueArtifactUrl = null;
 let queueTimer = null;
 let latestQueue = {current: null, queued: [], queued_count: 0, recent: null};
 let registerQrVerified = false;
+// The normal registration path is the SMS flow; Cookie import is an explicit
+// alternate method kept behind the underlined link in the form.
+let registerUsingLegacy = true;
+let cookieCsrfToken = "";
 let qrPollTimer = null;
+let qrExpireTimer = null;
+let qrFlowId = 0;
 let ydDeviceTokenPromise = null;
 
 function getYdDeviceToken() {
@@ -71,6 +77,34 @@ function busy(button, value, text = "处理中…") {
   button.textContent = value ? text : button.dataset.label;
 }
 
+async function ensureCookieCsrf() {
+  const data = await api("/api/auth/csrf");
+  cookieCsrfToken = String(data.csrf_token || "");
+  if (!cookieCsrfToken) throw new Error("无法准备 Cookie 导入验证，请刷新页面重试");
+  return cookieCsrfToken;
+}
+
+async function readCookieInput(fileSelector, textSelector) {
+  const fileInput = $(fileSelector);
+  const pasted = $(textSelector).value.trim();
+  if (fileInput.files.length && pasted) throw new Error("请只选择上传文件或粘贴内容其中一种方式");
+  let raw = pasted;
+  if (fileInput.files.length) raw = await fileInput.files[0].text();
+  if (!raw.trim()) throw new Error("请上传或粘贴 Cookie JSON");
+  let parsed;
+  try { parsed = JSON.parse(raw); }
+  catch { throw new Error("Cookie JSON 格式不正确"); }
+  if (!Array.isArray(parsed) && !(parsed && Array.isArray(parsed.cookies))) {
+    throw new Error("Cookie JSON 必须是浏览器导出的数组格式");
+  }
+  return parsed;
+}
+
+function clearCookieInput(fileSelector, textSelector) {
+  $(fileSelector).value = "";
+  $(textSelector).value = "";
+}
+
 async function refreshStatus() {
   try {
     const data = await api("/api/status");
@@ -88,6 +122,10 @@ async function refreshStatus() {
       $("#nickname").textContent = `${data.profile.username || data.profile.nickname} · ${data.profile.nickname || ""}`;
       $("#avatar").src = data.profile.avatarUrl || "";
       $("#neteaseBindingStatus").textContent = neteaseBound ? "网站账号已登录 · 已绑定网易云账号" : "网站账号已登录 · 尚未绑定网易云";
+      refreshQueue();
+    } else {
+      stopQueuePolling();
+      clearQueueView();
     }
     updateRenderAvailability();
   } catch (error) { notify(error.message, true); }
@@ -142,7 +180,7 @@ async function refreshSelectedVideoStatus() {
   const songId = selectedSong.id;
   const requestNumber = ++videoStatusRequest;
   try {
-    const data = await api(`/api/video/local/${encodeURIComponent(songId)}`, {headers: {}, credentials: "omit"});
+    const data = await api(`/api/video/local/${encodeURIComponent(songId)}`, {headers: {}});
     if (requestNumber === videoStatusRequest && selectedSong?.id === songId) applyCastStatus(data.local);
   } catch (error) {
     if (requestNumber === videoStatusRequest && selectedSong?.id === songId) {
@@ -355,7 +393,7 @@ async function refreshSelectedLocalStatus() {
   if (!selectedSong) return;
   const songId = selectedSong.id;
   try {
-    const data = await api(`/api/song/local/${encodeURIComponent(songId)}`, {headers: {}, credentials: "omit"});
+    const data = await api(`/api/song/local/${encodeURIComponent(songId)}`, {headers: {}});
     if (selectedSong?.id === songId) applyLocalStatus(data.local);
   } catch (error) {
     if (selectedSong?.id === songId) {
@@ -446,6 +484,8 @@ function openAccountModal() {
 function closeAccountModal() {
   stopQrPolling();
   closeNeteaseReauth();
+  clearCookieInput("#registerCookieFile", "#registerCookieText");
+  clearCookieInput("#reauthCookieFile", "#reauthCookieText");
   $("#accountModal").classList.add("hidden");
   document.body.classList.remove("modal-open");
   $("#accountPill").focus();
@@ -453,20 +493,33 @@ function closeAccountModal() {
 
 function setWebsiteAuthMode(mode) {
   const register = mode === "register";
+  stopQrPolling();
+  registerUsingLegacy = register;
+  registerQrVerified = false;
+  $("#smsRegisterFields").classList.remove("hidden");
+  $("#startQrRegister").classList.remove("hidden");
+  $("#qrRegisterPanel").classList.add("hidden");
   $("#websiteLoginMode").classList.toggle("active", !register);
   $("#websiteRegisterMode").classList.toggle("active", register);
   $("#websiteLoginForm").classList.toggle("hidden", register);
   $("#websiteRegisterForm").classList.toggle("hidden", !register);
+  $("#cookieRegisterFields").classList.toggle("hidden", !register || registerUsingLegacy);
+  $("#legacyRegisterMethods").classList.toggle("hidden", !register || !registerUsingLegacy);
+  $("#showLegacyRegister").textContent = registerUsingLegacy ? "使用 Cookie 导入" : "使用验证码/二维码";
+  $("#register").textContent = registerUsingLegacy ? "验证并创建用户" : "导入 Cookie 并创建用户";
   if (register) $("#registerUsername").focus();
   else $("#websiteUsername").focus();
 }
 
 function stopQrPolling() {
+  qrFlowId += 1;
   if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+  if (qrExpireTimer) { clearTimeout(qrExpireTimer); qrExpireTimer = null; }
 }
 
 async function startQrFlow({image, status, link, button, onVerified}) {
   stopQrPolling();
+  const flowId = qrFlowId;
   busy(button, true, "获取中…");
   try {
     const data = await api("/api/auth/qr/start", {
@@ -477,7 +530,17 @@ async function startQrFlow({image, status, link, button, onVerified}) {
     link.href = data.qr_url;
     status.textContent = "请使用网易云音乐 App 扫描二维码。";
     const ydDeviceToken = await getYdDeviceToken();
+    if (flowId !== qrFlowId) return;
+    let pollInFlight = false;
+    qrExpireTimer = setTimeout(() => {
+      if (flowId !== qrFlowId) return;
+      stopQrPolling();
+      status.textContent = "二维码已过期，请重新获取。";
+      notify("二维码已过期，请重新获取", true);
+    }, 300000);
     qrPollTimer = setInterval(async () => {
+      if (flowId !== qrFlowId || pollInFlight) return;
+      pollInFlight = true;
       try {
         const result = await api("/api/auth/qr/poll", {
           method: "POST",
@@ -486,6 +549,7 @@ async function startQrFlow({image, status, link, button, onVerified}) {
             browser_user_agent: navigator.userAgent,
           }),
         });
+        if (flowId !== qrFlowId) return;
         if (result.status === "scanned") status.textContent = "已扫描，请在网易云音乐 App 中确认登录。";
         if (result.status === "verified") {
           stopQrPolling();
@@ -496,9 +560,14 @@ async function startQrFlow({image, status, link, button, onVerified}) {
         stopQrPolling();
         status.textContent = error.message;
         notify(error.message, true);
+      } finally {
+        pollInFlight = false;
       }
     }, 1200);
-  } catch (error) { notify(error.message, true); }
+  } catch (error) {
+    status.textContent = error.message;
+    notify(error.message, true);
+  }
   finally { busy(button, false); }
 }
 
@@ -506,6 +575,13 @@ function openNeteaseReauth() {
   if (!accountLoggedIn) return openAccountModal();
   $("#accountModal").classList.remove("hidden");
   $("#neteaseReauthForm").classList.remove("hidden");
+  $("#cookieReauthFields").classList.add("hidden");
+  $("#reauthCookieSubmit").classList.add("hidden");
+  $("#legacyReauthMethods").classList.remove("hidden");
+  $("#smsReauthFields").classList.remove("hidden");
+  $("#startQrReauth").classList.remove("hidden");
+  $("#qrReauthPanel").classList.add("hidden");
+  $("#showLegacyReauth").textContent = "使用 Cookie 导入";
   $("#loggedIn").classList.add("hidden");
   $("#loggedOut").classList.add("hidden");
   document.body.classList.add("modal-open");
@@ -516,6 +592,24 @@ function closeNeteaseReauth() {
   stopQrPolling();
   $("#neteaseReauthForm").classList.add("hidden");
   if (accountLoggedIn) $("#loggedIn").classList.remove("hidden");
+}
+
+async function checkNeteaseCookieStatus(button) {
+  busy(button, true, "检查中…");
+  try {
+    const data = await api("/api/auth/netease-status");
+    if (data.valid) {
+      $("#neteaseBindingStatus").textContent = "网站账号已登录 · 网易云 Cookie 有效";
+      notify("网易云 Cookie 当前有效");
+    } else {
+      $("#neteaseBindingStatus").textContent = "网站账号已登录 · 网易云 Cookie 已失效";
+      notify(data.message || "网易云 Cookie 已失效，请重新验证", true);
+    }
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    busy(button, false);
+  }
 }
 
 function openAdminModal() {
@@ -660,20 +754,43 @@ $("#goToBuilder").addEventListener("click", () => $("#videoBuilder").scrollIntoV
 
 $("#websiteLoginMode").addEventListener("click", () => setWebsiteAuthMode("login"));
 $("#websiteRegisterMode").addEventListener("click", () => { registerQrVerified = false; setWebsiteAuthMode("register"); });
+$("#showLegacyRegister").addEventListener("click", (event) => {
+  event.preventDefault();
+  const showCookie = $("#cookieRegisterFields").classList.contains("hidden");
+  stopQrPolling();
+  registerUsingLegacy = !showCookie;
+  registerQrVerified = false;
+  $("#cookieRegisterFields").classList.toggle("hidden", !showCookie);
+  $("#legacyRegisterMethods").classList.toggle("hidden", showCookie);
+  $("#showLegacyRegister").textContent = registerUsingLegacy ? "使用 Cookie 导入" : "使用验证码/二维码";
+  $("#register").textContent = registerUsingLegacy ? "验证并创建用户" : "导入 Cookie 并创建用户";
+});
 
 $("#startQrRegister").addEventListener("click", async (event) => {
+  $("#smsRegisterFields").classList.add("hidden");
+  $("#startQrRegister").classList.add("hidden");
   $("#qrRegisterPanel").classList.remove("hidden");
   await startQrFlow({
     image: $("#qrRegisterImage"), status: $("#qrRegisterStatus"), link: $("#qrRegisterLink"),
     button: event.currentTarget,
     onVerified: () => {
       registerQrVerified = true;
+      registerUsingLegacy = true;
       $("#smsRegisterFields").classList.add("hidden");
+      $("#register").textContent = "验证并创建用户";
       notify("网易云账号验证成功，请填写网站用户名和密码后创建");
     },
   });
 });
 $("#refreshQrRegister").addEventListener("click", () => $("#startQrRegister").click());
+$("#switchSmsRegister").addEventListener("click", () => {
+  stopQrPolling();
+  registerQrVerified = false;
+  $("#qrRegisterPanel").classList.add("hidden");
+  $("#smsRegisterFields").classList.remove("hidden");
+  $("#startQrRegister").classList.remove("hidden");
+  $("#phone").focus();
+});
 
 $("#sendCaptcha").addEventListener("click", async (event) => {
   const button = event.currentTarget;
@@ -704,31 +821,79 @@ $("#login").addEventListener("click", async (event) => {
 $("#register").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   busy(button, true, "创建中…");
+  let cookieSubmitted = false;
   try {
-    await api("/api/auth/register", {
-      method: "POST",
-      body: JSON.stringify({
-        username: $("#registerUsername").value,
-        password: $("#registerPassword").value,
-        ...(registerQrVerified ? {qr: true} : {
-          phone: $("#phone").value,
-          captcha: $("#captcha").value,
-          country_code: $("#countryCode").value,
-        }),
-      }),
-    });
+    const payload = {
+      username: $("#registerUsername").value,
+      password: $("#registerPassword").value,
+    };
+    if (!registerUsingLegacy && !registerQrVerified) {
+      payload.cookies = await readCookieInput("#registerCookieFile", "#registerCookieText");
+      payload.csrf_token = await ensureCookieCsrf();
+      cookieSubmitted = true;
+    } else if (registerQrVerified) {
+      payload.qr = true;
+    } else {
+      payload.phone = $("#phone").value;
+      payload.captcha = $("#captcha").value;
+      payload.country_code = $("#countryCode").value;
+    }
+    await api("/api/auth/register", {method: "POST", body: JSON.stringify(payload)});
     $("#registerPassword").value = "";
     $("#phone").value = "";
     $("#captcha").value = "";
+    clearCookieInput("#registerCookieFile", "#registerCookieText");
     notify("网站账号创建成功");
     await refreshStatus();
     closeAccountModal();
   } catch (error) { notify(error.message, true); }
-  finally { busy(button, false); }
+  finally {
+    if (cookieSubmitted) clearCookieInput("#registerCookieFile", "#registerCookieText");
+    busy(button, false);
+  }
 });
 
 $("#reauthNetease").addEventListener("click", openNeteaseReauth);
+$("#checkNeteaseCookie").addEventListener("click", event => checkNeteaseCookieStatus(event.currentTarget));
+$("#showLegacyReauth").addEventListener("click", (event) => {
+  event.preventDefault();
+  const showCookie = $("#cookieReauthFields").classList.contains("hidden");
+  stopQrPolling();
+  $("#legacyReauthMethods").classList.toggle("hidden", showCookie);
+  $("#cookieReauthFields").classList.toggle("hidden", !showCookie);
+  $("#reauthCookieSubmit").classList.toggle("hidden", !showCookie);
+  $("#showLegacyReauth").textContent = showCookie ? "使用验证码/二维码" : "使用 Cookie 导入";
+  if (!showCookie) {
+    $("#smsReauthFields").classList.remove("hidden");
+    $("#startQrReauth").classList.remove("hidden");
+    $("#qrReauthPanel").classList.add("hidden");
+  }
+});
+$("#reauthCookieSubmit").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  let cookieSubmitted = false;
+  busy(button, true, "验证中…");
+  try {
+    const cookies = await readCookieInput("#reauthCookieFile", "#reauthCookieText");
+    const csrf_token = await ensureCookieCsrf();
+    cookieSubmitted = true;
+    await api("/api/auth/reauth", {
+      method: "POST",
+      body: JSON.stringify({cookies, csrf_token}),
+    });
+    clearCookieInput("#reauthCookieFile", "#reauthCookieText");
+    notify("网易云绑定已更新");
+    closeNeteaseReauth();
+    await refreshStatus();
+  } catch (error) { notify(error.message, true); }
+  finally {
+    if (cookieSubmitted) clearCookieInput("#reauthCookieFile", "#reauthCookieText");
+    busy(button, false);
+  }
+});
 $("#startQrReauth").addEventListener("click", async (event) => {
+  $("#smsReauthFields").classList.add("hidden");
+  $("#startQrReauth").classList.add("hidden");
   $("#qrReauthPanel").classList.remove("hidden");
   await startQrFlow({
     image: $("#qrReauthImage"), status: $("#qrReauthStatus"), link: $("#qrReauthLink"),
@@ -742,6 +907,13 @@ $("#startQrReauth").addEventListener("click", async (event) => {
   });
 });
 $("#refreshQrReauth").addEventListener("click", () => $("#startQrReauth").click());
+$("#switchSmsReauth").addEventListener("click", () => {
+  stopQrPolling();
+  $("#qrReauthPanel").classList.add("hidden");
+  $("#smsReauthFields").classList.remove("hidden");
+  $("#startQrReauth").classList.remove("hidden");
+  $("#reauthPhone").focus();
+});
 $("#sendReauthCaptcha").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   busy(button, true, "发送中…");
@@ -954,10 +1126,30 @@ $("#renderVideo").addEventListener("click", async (event) => {
   }
 });
 
-async function refreshQueue() {
+function stopQueuePolling() {
   clearTimeout(queueTimer);
+  queueTimer = null;
+}
+
+function clearQueueView() {
+  latestQueue = {current: null, queued: [], queued_count: 0, recent: null};
+  $("#queueCount").textContent = "等待 0";
+  $("#queueIdle strong").textContent = "登录后查看生成队列";
+  $("#queueIdle span:not(.dock-mark)").textContent = "网站账号登录后会显示任务进度";
+  $("#queueIdle").classList.remove("hidden");
+  $("#queueCurrent").classList.add("hidden");
+  $("#queueRecent").classList.add("hidden");
+  $("#queueProgressFill").style.width = "0%";
+}
+
+async function refreshQueue() {
+  stopQueuePolling();
+  if (!accountLoggedIn) {
+    clearQueueView();
+    return;
+  }
   try {
-    const data = await api("/api/video/queue", {headers: {}, credentials: "omit"});
+    const data = await api("/api/video/queue", {headers: {}});
     showQueue(data.queue);
   } catch {
     $("#queueIdle strong").textContent = "暂时无法取得队列状态";
@@ -967,7 +1159,7 @@ async function refreshQueue() {
     $("#queueRecent").classList.add("hidden");
     $("#queueProgressFill").style.width = "0%";
   } finally {
-    queueTimer = setTimeout(refreshQueue, 1500);
+    if (accountLoggedIn) queueTimer = setTimeout(refreshQueue, 1500);
   }
 }
 
@@ -1092,7 +1284,6 @@ $("#castHelp").textContent = typeof navigator.share === "function"
   ? "点击后在系统分享菜单中选择 BubbleUPnP，再由应用选择局域网内的播放设备。"
   : "当前浏览器或局域网 HTTP 页面不能调用系统分享；点击后会复制播放地址，请在 BubbleUPnP 中打开网络地址。";
 refreshStatus();
-refreshQueue();
 const rememberedSongId = localStorage.getItem("cloudmusic2ktv.selectedSongId");
 if (rememberedSongId) {
   $("#songInput").value = rememberedSongId;

@@ -1,6 +1,6 @@
 import base64
 
-from cloudmusic2ktv.netease import NeteaseClient, weapi_payload
+from cloudmusic2ktv.netease import NeteaseClient, normalize_cookie_records, weapi_payload
 
 
 def test_weapi_payload_is_stable_with_fixed_secret():
@@ -13,3 +13,17 @@ def test_weapi_payload_is_stable_with_fixed_secret():
 def test_netease_client_does_not_inherit_environment_proxies_by_default():
     assert NeteaseClient().session.trust_env is False
     assert NeteaseClient(trust_env_proxy=True).session.trust_env is True
+
+
+def test_imported_cookie_records_are_first_party_and_name_deduplicated():
+    result = normalize_cookie_records(
+        [
+            {"name": "__csrf", "value": "host", "domain": "music.163.com", "path": "/"},
+            {"name": "__csrf", "value": "parent", "domain": ".music.163.com", "path": "/"},
+            {"name": "MUSIC_U", "value": "secret", "domain": ".music.163.com", "path": "/"},
+            {"name": "TRACK", "value": "discarded", "domain": ".163.com", "path": "/"},
+        ]
+    )
+    assert {item["name"] for item in result} == {"__csrf", "MUSIC_U"}
+    csrf = next(item for item in result if item["name"] == "__csrf")
+    assert csrf["domain"] == ".music.163.com"

@@ -88,7 +88,7 @@ cloudmusic2ktv/
 
 `NeteaseClient` 和 `SongDownloadService` 不再全局共享，而是根据当前网站账号绑定的网易云 Cookie 或匿名模式为每次请求创建。歌曲素材、下载互斥状态和视频队列仍是全局共享状态。
 
-默认监听 `0.0.0.0:7860`，可用 `CLOUDMUSIC2KTV_HOST` 和 `CLOUDMUSIC2KTV_PORT` 覆盖；只允许本机访问时将 `CLOUDMUSIC2KTV_HOST` 设为 `127.0.0.1`。Flask 以 `threaded=True` 启动，但视频编码器自己的执行池只有一个 worker。长期公网部署时由外层反向代理终止 HTTPS，项目本身保持 HTTP。
+默认监听 `0.0.0.0:7860`，可用 `CLOUDMUSIC2KTV_HOST` 和 `CLOUDMUSIC2KTV_PORT` 覆盖；只允许本机访问时将 `CLOUDMUSIC2KTV_HOST` 设为 `127.0.0.1`。Flask 以 `threaded=True` 启动，但视频编码器自己的执行池只有一个 worker。局域网测试可以同时设置 `CLOUDMUSIC2KTV_TLS_CERT` 和 `CLOUDMUSIC2KTV_TLS_KEY`，让内置服务器直接使用本地 CA 证书提供 HTTPS；两个路径支持相对于项目根目录的写法。未设置时保持 HTTP。长期公网部署时也可由外层反向代理终止正式 HTTPS；此时仅在代理可信且会覆盖转发头时设置 `CLOUDMUSIC2KTV_TRUST_PROXY=1`，让应用据 `X-Forwarded-Proto` 判断 Cookie 导入是否经过 HTTPS。直接暴露应用时不要设置该变量。
 
 ### API 一览
 
@@ -96,12 +96,14 @@ cloudmusic2ktv/
 | --- | --- | --- |
 | `GET /` | WebUI | 无 |
 | `GET /api/status` | 查询登录状态 | 无 |
+| `GET /api/auth/csrf` | 为 Cookie 导入创建一次 CSRF 令牌并建立临时会话 | 无 |
+| `GET /api/auth/netease-status` | 使用当前绑定账号的用户主页检查网易云 Cookie 是否有效 | 名单成员会话 |
 | `POST /api/auth/captcha` | 为新建网站用户或重新验证网易云账号发送短信验证码 | `phone`, `country_code` |
 | `POST /api/auth/qr/start` | 创建当前网易云网页扫码验证二维码 | 无 |
 | `POST /api/auth/qr/poll` | 轮询扫码验证状态；成功后得到网易云身份 | 无 |
 | `POST /api/auth/login` | 网站用户名密码登录，不调用网易云登录接口 | `username`, `password` |
-| `POST /api/auth/register` | 验证名单内网易云账号并创建不可换绑的网站用户 | 网站账号、手机号/验证码或 `qr: true` |
-| `POST /api/auth/reauth` | 重新验证当前绑定的网易云账号并更新共享 Cookie | `phone`, `captcha`, `country_code` |
+| `POST /api/auth/register` | 验证名单内网易云账号并创建不可换绑的网站用户 | 网站账号、`cookies` + `csrf_token`，或旧版手机号/验证码、`qr: true` |
+| `POST /api/auth/reauth` | 重新验证当前绑定的网易云账号并更新共享 Cookie | `cookies` + `csrf_token`，或旧版手机号/验证码、`qr: true` |
 | `POST /api/auth/logout` | 退出网站账号，不删除共享网易云绑定 | 无 |
 | `GET /api/search?q=...` | 搜索歌曲（名单成员） | 查询字符串 |
 | `POST /api/song/inspect` | 按 ID/链接读取歌曲信息（名单成员） | `song` |
@@ -135,6 +137,10 @@ cloudmusic2ktv/
 - 每个浏览器通过 `HttpOnly`、`SameSite=Lax` 的随机会话 Cookie 标识网站账号；
 - 网站用户名密码保存在 `instance/accounts.json`，密码使用 scrypt 哈希；
 - 网易云 Cookie 按绑定的网易云 `userId` 保存在 `instance/netease_bindings.json`，同一网站账号的不同设备共享这份绑定；
+- Cookie 导入支持浏览器 JSON 文件和粘贴的 JSON 数组；服务端只保留 `music.163.com` 域 Cookie，过滤其他域并按名称去重，避免多个 `__csrf` Cookie 造成请求歧义；
+- Cookie 导入请求需要一次性会话 CSRF 令牌，并默认要求 HTTPS；本机回环地址可用于开发测试，受信任内网临时测试可显式设置 `CLOUDMUSIC2KTV_ALLOW_INSECURE_COOKIE_IMPORT=1`；
+- Cookie 导入完成后只调用一次账号状态接口验证身份，失败时清空临时 Cookie，不写入绑定文件；成功后仅保存筛选后的 Cookie，并校验名单和不可换绑的 `userId` 关系；
+- 已登录浮窗的网易云状态检查只调用当前绑定 Cookie 的登录状态接口并校验返回的 `userId`，不会修改绑定文件；网易云鉴权失败时返回需要重新验证的状态，网络等其他错误仍按服务错误处理；
 - 身份使用时进行单文件惰性过期检查，默认 90 天；服务启动和成功登录后遍历清理过期文件；
 - 网站登录成功后轮换浏览器会话 Cookie；退出网站不会注销网易云或删除绑定；
 - 绑定文件使用 `.part` 原子替换；
@@ -143,6 +149,7 @@ cloudmusic2ktv/
 - 手机验证码发送使用 `/api/sms/captcha/sent`；
 - 扫码验证使用当前网页实际发出的加密接口 `/weapi/login/qrcode/unikey` 与 `/weapi/login/qrcode/client/login`，二维码短期凭证记录在网站服务端会话中；浏览器会尝试生成当前网页的 `ydDeviceToken` 并只在轮询请求中转发，不写入本地文件；
 - 网易云返回 8821/8830 时表示扫码授权链路被风控拒绝，前端会停止轮询并要求刷新二维码；这不是名单权限校验失败；
+- 二维码轮询间隔约 1.2 秒，服务端凭证有效期为 5 分钟；前端在成功、过期、错误、关闭浮窗或切换短信/Cookie 方式时停止轮询，并防止网络较慢时产生重叠请求。
 - 短信登录仍保留 `/weapi/login/cellphone` 兼容回退；网易云当前网页的 `/api/login/cellphone` 需要浏览器私有的 encrypt-fetch 与反作弊令牌，不能仅靠普通服务端请求替代；
 - 未登录网站账号时只能访问网站登录入口；网站账号已登录但网易云 Cookie 失效时，公开歌曲接口和免费歌曲下载可以回退匿名客户端，本地资源仍可访问，付费歌曲会要求重新验证原绑定账号。
 
@@ -326,7 +333,7 @@ cloudmusic2ktv/
 - `accountLoggedIn`：当前浏览器的网站账号登录状态；网易云绑定是否存在由状态接口单独返回；
 - `cloudmusic2ktv.selectedSongId`：localStorage 中用于刷新后恢复选歌的 ID；
 - `previewRequest`：丢弃过期预览响应，避免较慢响应覆盖较新设置；
-- `queueTimer`：轮询当前名单成员可见的视频队列。
+- `queueTimer`：仅在网站账号已登录时轮询当前名单成员可见的视频队列；未登录时停止定时器，避免反复请求受保护接口并污染错误日志。
 - `selectedSongVideos`：03 区为当前歌曲从本地扫描到的可投屏 MP4；不依赖登录或素材完整状态；
 - `videoStatusRequest`：丢弃切歌后才返回的过期本地视频查询。
 

@@ -1,3 +1,5 @@
+import pytest
+
 import app as web_app
 from cloudmusic2ktv.access import AllowlistStore
 from cloudmusic2ktv.netease import NeteaseClient
@@ -28,6 +30,33 @@ def member_client(monkeypatch, tmp_path, *, user_id="2", role="user"):
 
 def test_custom_background_upload_limit_is_32_mib():
     assert web_app.app.config["MAX_CONTENT_LENGTH"] == 32 * 1024 * 1024
+
+
+def test_tls_context_from_env_is_optional_and_requires_both_files(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLOUDMUSIC2KTV_TLS_CERT", raising=False)
+    monkeypatch.delenv("CLOUDMUSIC2KTV_TLS_KEY", raising=False)
+    assert web_app.tls_context_from_env() is None
+
+    monkeypatch.setenv("CLOUDMUSIC2KTV_TLS_CERT", str(tmp_path / "server.crt"))
+    with pytest.raises(RuntimeError, match="必须同时设置"):
+        web_app.tls_context_from_env()
+
+
+def test_tls_context_from_env_resolves_existing_certificate_and_key(monkeypatch, tmp_path):
+    certificate = tmp_path / "server.crt"
+    key = tmp_path / "server.key"
+    certificate.write_text("certificate", encoding="ascii")
+    key.write_text("key", encoding="ascii")
+    monkeypatch.setenv("CLOUDMUSIC2KTV_TLS_CERT", str(certificate))
+    monkeypatch.setenv("CLOUDMUSIC2KTV_TLS_KEY", str(key))
+    assert web_app.tls_context_from_env() == (str(certificate), str(key))
+
+
+def test_https_requests_mark_the_site_session_cookie_secure(monkeypatch, tmp_path):
+    monkeypatch.setattr(web_app, "auth_sessions", FileSessionStore(tmp_path))
+    response = web_app.app.test_client().get("/api/auth/csrf", base_url="https://localhost")
+    assert response.status_code == 200
+    assert "Secure" in response.headers["Set-Cookie"]
 
 
 def test_unknown_route_remains_404():

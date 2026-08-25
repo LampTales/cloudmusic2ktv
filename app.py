@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hmac
 import os
 import re
 import secrets
@@ -12,6 +13,7 @@ from typing import Any, Iterator
 
 from flask import Flask, g, jsonify, render_template, request, send_file, url_for
 from functools import wraps
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.exceptions import HTTPException
 
 from cloudmusic2ktv import NeteaseClient, NeteaseError, SongDownloadService
@@ -48,6 +50,9 @@ VIDEO_FILE = re.compile(r"^ktv_(1080p|720p)(?:_[0-9a-f]{12})?\.mp4$")
 app = Flask(__name__, instance_path=str(INSTANCE), instance_relative_config=True)
 app.config.update(MAX_CONTENT_LENGTH=32 * 1024 * 1024)
 app.json.ensure_ascii = False
+if os.environ.get("CLOUDMUSIC2KTV_TRUST_PROXY") == "1":
+    # Only enable this when the app is behind a controlled reverse proxy.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 auth_sessions = FileSessionStore(INSTANCE / "sessions", ttl_seconds=SESSION_TTL_SECONDS)
 allowlist = AllowlistStore(INSTANCE / "allowlist.json")
@@ -56,6 +61,8 @@ netease_bindings = NeteaseBindingStore(INSTANCE / "netease_bindings.json")
 video_jobs = VideoJobManager(OUTPUTS)
 download_state_lock = threading.Lock()
 active_downloads: set[int] = set()
+cookie_import_rate_lock = threading.Lock()
+cookie_import_last_attempt: dict[str, float] = {}
 auth_sessions.cleanup_expired()
 
 
@@ -143,6 +150,17 @@ def status() -> Any:
     return jsonify(result)
 
 
+@app.get("/api/auth/csrf")
+def auth_csrf() -> Any:
+    """Create or retrieve the short-lived CSRF token used by Cookie import."""
+    with auth_sessions.open(auth_token(), create=True, touch=True) as session:
+        assert session is not None
+        response = jsonify({"ok": True, "csrf_token": session.csrf_token})
+        response.headers["Cache-Control"] = "no-store"
+        set_auth_cookie(response, session.token)
+        return response
+
+
 @app.post("/api/auth/captcha")
 def send_captcha() -> Any:
     body = json_body()
@@ -154,6 +172,40 @@ def send_captcha() -> Any:
         response = jsonify({"ok": True, "message": "验证码已发送"})
         set_auth_cookie(response, session.token)
         return response
+
+
+def _cookie_import_profile(session: Any, body: dict[str, Any]) -> dict[str, Any]:
+    """Load and validate an imported browser Cookie without persisting it yet."""
+    if request.content_length and request.content_length > 128 * 1024:
+        raise AccountError("Cookie 数据过大")
+    if not request.is_secure:
+        local_hosts = {"127.0.0.1", "::1", "localhost"}
+        allow_insecure = os.environ.get("CLOUDMUSIC2KTV_ALLOW_INSECURE_COOKIE_IMPORT") == "1"
+        if request.remote_addr not in local_hosts and not allow_insecure:
+            raise AccountError("Cookie 导入需要通过 HTTPS 进行")
+    supplied_csrf = str(body.get("csrf_token") or "")
+    if not supplied_csrf or not hmac.compare_digest(supplied_csrf, session.csrf_token):
+        raise AccountError("Cookie 导入请求已失效，请重新打开导入窗口")
+    now = time.monotonic()
+    with cookie_import_rate_lock:
+        for token, timestamp in list(cookie_import_last_attempt.items()):
+            if now - timestamp > 600:
+                cookie_import_last_attempt.pop(token, None)
+        previous = cookie_import_last_attempt.get(session.token, 0.0)
+        if now - previous < 3.0:
+            raise AccountError("Cookie 导入操作过于频繁，请稍后再试")
+        cookie_import_last_attempt[session.token] = now
+    try:
+        session.client.load_imported_cookies(body.get("cookies"))
+        value = session.client.account_status()
+    except NeteaseError as exc:
+        session.client.session.cookies.clear()
+        raise AccountError("Cookie 格式不正确或已失效") from exc
+    profile = public_profile(value.get("profile"))
+    if not value.get("logged_in") or not profile or profile.get("userId") is None:
+        session.client.session.cookies.clear()
+        raise AccountError("Cookie 无效或已过期")
+    return profile
 
 
 def _new_qr_chain_id() -> str:
@@ -295,11 +347,12 @@ def register() -> Any:
     body = json_body()
     username = required_string(body, "username")
     password = required_string(body, "password")
+    cookie_mode = "cookies" in body
     qr_mode = bool(body.get("qr"))
     phone = ""
     captcha = ""
     country_code = clean_country_code(body.get("country_code", "86"))
-    if not qr_mode:
+    if not qr_mode and not cookie_mode:
         phone = required_string(body, "phone")
         captcha = required_string(body, "captcha")
     previous_token = None
@@ -307,7 +360,10 @@ def register() -> Any:
     rejected = False
     with auth_sessions.open(auth_token(), create=True, touch=True) as session:
         assert session is not None
-        if qr_mode:
+        session.discard_cookies_on_error = cookie_mode
+        if cookie_mode:
+            profile = _cookie_import_profile(session, body)
+        elif qr_mode:
             pending = session.pending_qr or {}
             if pending.get("purpose") != "register" or pending.get("status") != "verified":
                 raise AccountError("请先完成网易云扫码验证")
@@ -317,6 +373,10 @@ def register() -> Any:
             profile = public_profile(result.get("profile") or session.client.account_status().get("profile"))
         if not profile or profile.get("userId") is None:
             raise AccountError("网易云没有返回有效的用户身份")
+        # Validate the local account before potentially bootstrapping or
+        # changing the allowlist, so a duplicate username cannot leave an
+        # orphaned first administrator entry.
+        website_accounts.validate_new_account(username, password)
         try:
             role = allowlist.authorize_login(profile)
         except UserNotAllowed:
@@ -338,6 +398,7 @@ def register() -> Any:
             netease_bindings.save(profile["userId"], profile, session.client.export_cookies())
             session.client.session.cookies.clear()
             session.pending_qr = None
+            session.csrf_token = secrets.token_urlsafe(32)
             session.profile = {
                 "username": account["username"],
                 "netease_user_id": account["netease_user_id"],
@@ -360,17 +421,21 @@ def register() -> Any:
 @member_required
 def reauthenticate_netease() -> Any:
     body = json_body()
+    cookie_mode = "cookies" in body
     qr_mode = bool(body.get("qr"))
     phone = ""
     captcha = ""
     country_code = clean_country_code(body.get("country_code", "86"))
-    if not qr_mode:
+    if not qr_mode and not cookie_mode:
         phone = required_string(body, "phone")
         captcha = required_string(body, "captcha")
     identity = g.current_user
     with auth_sessions.open(auth_token(), touch=True) as session:
         assert session is not None
-        if qr_mode:
+        session.discard_cookies_on_error = cookie_mode
+        if cookie_mode:
+            profile = _cookie_import_profile(session, body)
+        elif qr_mode:
             pending = session.pending_qr or {}
             if pending.get("purpose") != "reauth" or pending.get("status") != "verified":
                 raise AccountError("请先完成网易云扫码验证")
@@ -385,7 +450,59 @@ def reauthenticate_netease() -> Any:
         netease_bindings.save(profile["userId"], profile, session.client.export_cookies())
         session.client.session.cookies.clear()
         session.pending_qr = None
+        session.csrf_token = secrets.token_urlsafe(32)
     return jsonify({"ok": True, "message": "网易云账号已重新验证"})
+
+
+@app.get("/api/auth/netease-status")
+@member_required
+def netease_binding_status() -> Any:
+    """Check the current site's bound NetEase Cookie with an authenticated profile call."""
+    identity = g.current_user
+    user_id = str(identity.get("netease_user_id") or "").strip()
+    binding = netease_bindings.load(user_id)
+    if not binding:
+        return jsonify(
+            {
+                "ok": True,
+                "valid": False,
+                "needs_reauth": True,
+                "message": "当前网站账号尚未保存可用的网易云绑定",
+            }
+        )
+    try:
+        with current_netease_client() as client:
+            value = client.account_status()
+    except NeteaseError as exc:
+        if is_netease_auth_failure(exc) or exc.code in {301, -110}:
+            return jsonify(
+                {
+                    "ok": True,
+                    "valid": False,
+                    "needs_reauth": True,
+                    "message": "网易云 Cookie 已失效，请重新验证原绑定账号",
+                }
+            )
+        raise
+    profile = public_profile(value.get("profile"))
+    if not value.get("logged_in") or not profile or str(profile.get("userId")) != user_id:
+        return jsonify(
+            {
+                "ok": True,
+                "valid": False,
+                "needs_reauth": True,
+                "message": "网易云 Cookie 已失效，请重新验证原绑定账号",
+            }
+        )
+    return jsonify(
+        {
+            "ok": True,
+            "valid": True,
+            "needs_reauth": False,
+            "profile": public_profile(profile),
+            "message": "网易云 Cookie 当前有效",
+        }
+    )
 
 
 @app.post("/api/auth/logout")
@@ -567,7 +684,10 @@ def admin_search_users() -> Any:
     query = (request.args.get("q") or "").strip()
     if not query:
         return error_response("请输入网易云昵称或用户关键词", "invalid_query", 400)
-    with anonymous_netease_client() as client:
+    # User search is a logged-in web feature in the current NetEase API.  Use
+    # the administrator's bound client when available instead of the
+    # anonymous fallback used by public song search.
+    with current_netease_client() as client:
         users = client.search_users(query)
     return jsonify({"ok": True, "users": users})
 
@@ -831,7 +951,34 @@ def error_response(message: str, code: Any, status_code: int) -> tuple[Any, int]
     return jsonify({"ok": False, "error": {"message": message, "code": code}}), status_code
 
 
+def tls_context_from_env() -> tuple[str, str] | None:
+    """Return an optional certificate/key pair for local HTTPS testing."""
+    certificate_value = os.environ.get("CLOUDMUSIC2KTV_TLS_CERT", "").strip()
+    key_value = os.environ.get("CLOUDMUSIC2KTV_TLS_KEY", "").strip()
+    if not certificate_value and not key_value:
+        return None
+    if not certificate_value or not key_value:
+        raise RuntimeError(
+            "CLOUDMUSIC2KTV_TLS_CERT 和 CLOUDMUSIC2KTV_TLS_KEY 必须同时设置"
+        )
+
+    def resolve(value: str) -> Path:
+        candidate = Path(os.path.expandvars(value)).expanduser()
+        return candidate if candidate.is_absolute() else ROOT / candidate
+
+    certificate = resolve(certificate_value)
+    key = resolve(key_value)
+    if not certificate.is_file():
+        raise RuntimeError(f"HTTPS 证书文件不存在：{certificate}")
+    if not key.is_file():
+        raise RuntimeError(f"HTTPS 私钥文件不存在：{key}")
+    return str(certificate), str(key)
+
+
 if __name__ == "__main__":
     host = os.environ.get("CLOUDMUSIC2KTV_HOST", "0.0.0.0")
     port = int(os.environ.get("CLOUDMUSIC2KTV_PORT", "7860"))
-    app.run(host=host, port=port, debug=False, threaded=True)
+    ssl_context = tls_context_from_env()
+    if ssl_context:
+        print("HTTPS 已启用（证书由 CLOUDMUSIC2KTV_TLS_CERT 提供）")
+    app.run(host=host, port=port, debug=False, threaded=True, ssl_context=ssl_context)

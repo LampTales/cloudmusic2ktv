@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import secrets
 import string
 from pathlib import Path
@@ -23,6 +24,12 @@ MODULUS = int(
     "13cfe4875d3e82047b97ddef52741d546b8e289dc6935b3ece0462db0a22b8e7",
     16,
 )
+
+COOKIE_DOMAINS = {"music.163.com", ".music.163.com"}
+COOKIE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$")
+COOKIE_AUTH_NAMES = {"MUSIC_U", "MUSIC_A"}
+MAX_IMPORTED_COOKIES = 100
+MAX_IMPORTED_COOKIE_BYTES = 64 * 1024
 
 
 class NeteaseError(RuntimeError):
@@ -359,13 +366,83 @@ class NeteaseClient:
     def load_cookies(self, cookies: list[dict[str, Any]]) -> None:
         """Replace the current cookie jar with serialized NetEase cookies."""
         self.session.cookies.clear()
-        for item in cookies:
+        if not cookies:
+            return
+        try:
+            normalized = normalize_cookie_records(cookies)
+        except NeteaseError:
+            # Persisted session data is untrusted runtime state; a malformed
+            # record should behave like an expired anonymous session.
+            return
+        for item in normalized:
             self.session.cookies.set(
                 item["name"],
                 item["value"],
                 domain=item.get("domain") or ".music.163.com",
                 path=item.get("path") or "/",
             )
+
+    def load_imported_cookies(self, cookies: Any) -> list[dict[str, str]]:
+        """Load a browser-exported Cookie JSON after strict filtering.
+
+        Only first-party music.163.com cookies are accepted, duplicate names
+        are collapsed to one deterministic value, and at least one account
+        cookie must be present. The caller must still verify the account with
+        :meth:`account_status` before persisting the binding.
+        """
+        normalized = normalize_cookie_records(cookies)
+        if not any(item["name"] in COOKIE_AUTH_NAMES for item in normalized):
+            raise NeteaseError("Cookie 中缺少网易云登录凭证", code="cookie_missing_auth")
+        self.load_cookies(normalized)
+        return normalized
+
+
+def normalize_cookie_records(value: Any) -> list[dict[str, str]]:
+    """Validate and minimize a browser cookie export without exposing values."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError) as exc:
+            raise NeteaseError("Cookie JSON 格式不正确", code="cookie_invalid") from exc
+    if isinstance(value, dict) and isinstance(value.get("cookies"), list):
+        value = value["cookies"]
+    if not isinstance(value, list) or not value:
+        raise NeteaseError("Cookie JSON 必须是非空数组", code="cookie_invalid")
+    if len(value) > MAX_IMPORTED_COOKIES:
+        raise NeteaseError("Cookie 数量过多", code="cookie_invalid")
+
+    selected: dict[str, tuple[int, dict[str, str]]] = {}
+    total_bytes = 0
+    for raw in value:
+        if not isinstance(raw, dict):
+            raise NeteaseError("Cookie 项格式不正确", code="cookie_invalid")
+        name = str(raw.get("name") or "")
+        cookie_value = raw.get("value")
+        domain = str(raw.get("domain") or ".music.163.com").strip().lower()
+        path = str(raw.get("path") or "/")
+        # Browser exports commonly contain analytics cookies for the parent
+        # .163.com domain. Ignore those rather than rejecting an otherwise
+        # valid music.163.com export.
+        if domain not in COOKIE_DOMAINS:
+            continue
+        if not name or not COOKIE_NAME_PATTERN.fullmatch(name):
+            raise NeteaseError("Cookie 名称不合法", code="cookie_invalid")
+        if not isinstance(cookie_value, str) or not cookie_value or len(cookie_value) > 8192:
+            raise NeteaseError("Cookie 值不合法", code="cookie_invalid")
+        if not path.startswith("/") or len(path) > 256:
+            raise NeteaseError("Cookie 域名或路径不受支持", code="cookie_invalid")
+        total_bytes += len(name) + len(cookie_value) + len(domain) + len(path)
+        if total_bytes > MAX_IMPORTED_COOKIE_BYTES:
+            raise NeteaseError("Cookie 数据过大", code="cookie_invalid")
+        item = {"name": name, "value": cookie_value, "domain": domain, "path": path}
+        # A request library cannot resolve an unqualified lookup when two
+        # domains contain the same name. Prefer the parent-domain cookie and
+        # keep one value per name, which also prevents ambiguous csrf tokens.
+        rank = 0 if domain == ".music.163.com" else 1
+        previous = selected.get(name)
+        if previous is None or rank < previous[0]:
+            selected[name] = (rank, item)
+    return [entry for _, entry in sorted(selected.values(), key=lambda pair: pair[1]["name"])]
 
 
 def weapi_payload(payload: dict[str, Any], secret_key: str | None = None) -> dict[str, str]:
