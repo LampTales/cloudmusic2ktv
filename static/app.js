@@ -783,7 +783,7 @@ $("#startQrRegister").addEventListener("click", async (event) => {
   });
 });
 $("#refreshQrRegister").addEventListener("click", () => $("#startQrRegister").click());
-$("#switchSmsRegister").addEventListener("click", () => {
+$("#switchSmsRegister")?.addEventListener("click", () => {
   stopQrPolling();
   registerQrVerified = false;
   $("#qrRegisterPanel").classList.add("hidden");
@@ -907,7 +907,7 @@ $("#startQrReauth").addEventListener("click", async (event) => {
   });
 });
 $("#refreshQrReauth").addEventListener("click", () => $("#startQrReauth").click());
-$("#switchSmsReauth").addEventListener("click", () => {
+$("#switchSmsReauth")?.addEventListener("click", () => {
   stopQrPolling();
   $("#qrReauthPanel").classList.add("hidden");
   $("#smsReauthFields").classList.remove("hidden");
