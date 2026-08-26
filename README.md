@@ -1,107 +1,71 @@
 # CloudMusic2KTV
 
-CloudMusic2KTV 是一个本地运行的网易云音乐练唱工具。它可以获取歌曲素材，并生成带封面和歌词的 KTV 视频。
+CloudMusic2KTV 是一个将用户有权访问的网易云歌曲素材转换为带封面、歌词和频谱效果的 KTV 风格视频，并通过网页播放或投屏的自托管工具。
 
-请只处理你有权访问的歌曲，并仅用于个人使用。
+推荐使用 Docker 部署。项目也保留 Python 直接运行方式，适合开发、排查问题和本地调试。
 
-## 运行要求
+请只处理你有权访问的歌曲，并仅用于个人或获授权的使用场景。本项目不绕过网易云音乐的付费或播放权限；音频、歌词、封面和生成视频可能受到版权及服务条款限制。
 
-- Windows 10/11；
-- Python 3.11 或更高版本；
-- 可以访问网易云音乐；
-- 拥有网易云音乐账号。
+## 正式部署：Docker + HTTPS 反向代理
 
-## 安装和启动
+### 运行要求
 
-在 PowerShell 中进入项目目录，执行：
+- 一台 Linux 服务器（有公网 IP，或能被域名解析到）；
+- Docker Engine 和 Docker Compose Plugin；
+- 一个已经配置 DNS 的域名；
+- Nginx、Caddy 或其他能够提供 HTTPS 的反向代理；
+- 服务器能够访问 Docker Registry、Debian 软件源和 PyPI。
 
-```powershell
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe app.py
-```
+正式部署不需要在服务器上安装 Python。Docker 镜像会包含 Python、FFmpeg、Noto CJK 字体和项目依赖。
 
-然后在运行电脑上查看局域网 IPv4 地址：
+### 1. 获取代码
 
-```powershell
-ipconfig
-```
+~~~
+git clone <你的仓库地址> cloudmusic2ktv
+cd cloudmusic2ktv
+~~~
 
-在同一局域网的电脑或手机浏览器中打开：
+只需要传递代码和 Docker 文件。不要复制本地的 instance/、outputs/、docker-data/、.env 或 .venv/；其中可能包含网站账号、网易云 Cookie、会话和本地媒体。
 
-```text
-http://<电脑局域网IP>:7860/
-```
+### 2. 配置应用
 
-例如：`http://192.168.1.20:7860/`。在运行电脑本机也可以使用 `http://127.0.0.1:7860/`。
+~~~
+cp .env.example .env
+~~~
 
-### 局域网 HTTPS 测试
+如果应用发布在域名的 /ktv/ 子路径，.env 使用：
 
-局域网测试如需保护密码、会话和网易云 Cookie，建议使用 `mkcert` 等工具签发包含服务器局域网 IP 的本地 HTTPS 证书，并在测试设备上信任该证书。配置证书和私钥：
+~~~
+CLOUDMUSIC2KTV_BASE_PATH=/ktv
+CLOUDMUSIC2KTV_TRUST_PROXY=1
+CLOUDMUSIC2KTV_BIND_ADDRESS=127.0.0.1
+~~~
 
-```powershell
-$env:CLOUDMUSIC2KTV_TLS_CERT = "instance/tls/server.crt"
-$env:CLOUDMUSIC2KTV_TLS_KEY = "instance/tls/server.key"
-.venv\Scripts\python.exe app.py
-```
+BASE_PATH 是应用所在的 URL 前缀；TRUST_PROXY=1 只在完全控制反向代理时启用；BIND_ADDRESS=127.0.0.1 可避免容器端口直接暴露到公网。新安装时，建议先暂时只允许内网访问，完成管理员初始化后再开放公网。
 
-两个变量必须同时设置；未设置时使用 HTTP。只有通过 HTTPS 访问时才允许导入网易云 Cookie。公网部署时应由反向代理提供正式 HTTPS。
+### 3. 创建运行数据目录并构建
 
-服务默认监听 `0.0.0.0`，因此会向局域网开放登录入口和本地视频文件。请只在可信的家庭或个人网络中使用，不要直接暴露到公网。
-
-如果只希望本机访问，可以这样启动：
-
-```powershell
-$env:CLOUDMUSIC2KTV_HOST = "127.0.0.1"
-.venv\Scripts\python.exe app.py
-```
-
-关闭运行 `app.py` 的终端即可停止服务。
-
-## Docker 局域网测试
-
-仓库已经提供 `Dockerfile` 和 `docker-compose.yml`。Docker 构建上下文会通过
-`.dockerignore` 排除 `instance/`、`outputs/`、`.venv/` 和日志；运行数据使用
-项目下的 `docker-data/` 持久化目录，不会覆盖当前调试用的数据。
-
-在安装了 Docker Desktop 的 macOS 上，在项目根目录执行：
-
-```bash
+~~~
 mkdir -p docker-data/instance docker-data/outputs
 docker compose build
 docker compose up -d
 docker compose ps
-```
+~~~
 
-然后在 Mac 本机打开 `http://127.0.0.1:7860/`，局域网其他设备打开
-`http://<Mac 局域网 IP>:7860/`。停止服务：
+docker-data/ 是运行时数据目录，会保存账号、网易云绑定、歌曲素材和生成视频。它不会被复制进镜像，也不会因为重新构建镜像而删除。
 
-```bash
+查看日志或停止服务：
+
+~~~
+docker compose logs -f
 docker compose down
-```
+~~~
 
-不要把当前调试用的 `instance/` 或 `outputs/` 映射到容器；其中可能包含账号、网易云 Cookie 和本地媒体。首次 Docker 测试应在网页中重新登录并生成测试素材。
+### 4. 配置 Nginx 子路径反代
 
-### 子路径反向代理配置
+假设访问地址为 https://example.com/ktv/：
 
-如果反向代理将应用发布在 `https://example.com/ktv/`，在项目根目录创建 `.env`：
-
-```dotenv
-CLOUDMUSIC2KTV_BASE_PATH=/ktv
-CLOUDMUSIC2KTV_TRUST_PROXY=1
-```
-
-反向代理需要移除 `/ktv` 后再转发，并覆盖而不是追加以下头：
-
-```text
-X-Forwarded-Proto: https
-X-Forwarded-Host: example.com
-X-Forwarded-Prefix: /ktv
-```
-
-例如 Nginx 可以使用以下 location（末尾的 `/` 会把 `/ktv` 剥离后再转发）：
-
-```nginx
+~~~nginx
 location /ktv/ {
     proxy_pass http://127.0.0.1:7860/;
     proxy_set_header Host $host;
@@ -112,88 +76,115 @@ location /ktv/ {
     client_max_body_size 32m;
     proxy_read_timeout 300s;
 }
-```
+~~~
 
-当前前端会从 Flask 的脚本根路径生成 API URL，视频链接和静态资源也会跟随该前缀。`CLOUDMUSIC2KTV_TRUST_PROXY=1` 只可用于你完全控制的反向代理；直接局域网 HTTP 测试时保持为 `0`。
+proxy_pass 末尾的 / 很重要：它会把 /ktv 剥离后转发到容器。反向代理必须覆盖而不是信任客户端传入的 X-Forwarded-* 请求头，并负责 HTTPS 证书。
 
-正式由同机反代访问时，可在 `.env` 中将 `CLOUDMUSIC2KTV_BIND_ADDRESS` 改为
-`127.0.0.1`，避免把容器端口直接暴露到公网。
+应用会自动让 API、静态资源、视频链接和会话 Cookie 跟随 /ktv 前缀。未使用反向代理时不要设置 CLOUDMUSIC2KTV_TRUST_PROXY=1。
+
+### 5. 完成初始化和更新
+
+通过 HTTPS 打开网页后，先使用自己的网易云账号注册并确认成为管理员，再添加朋友账号。网易云 Cookie 保存在服务器的 docker-data/instance/ 中，服务器管理员可以读取该目录。
+
+更新前等待当前视频生成任务完成并备份数据：
+
+~~~
+git pull
+docker compose build
+docker compose up -d
+~~~
+
+当前视频任务只保存在 Python 进程内，重启会丢失队列状态并中断正在生成的视频。
+
+## Docker 局域网调试
+
+这一步适合先在 macOS Docker Desktop 上验证 Linux 容器行为。
+
+确保 .env 中保持：
+
+~~~
+CLOUDMUSIC2KTV_BASE_PATH=
+CLOUDMUSIC2KTV_TRUST_PROXY=0
+CLOUDMUSIC2KTV_BIND_ADDRESS=0.0.0.0
+~~~
+
+在项目根目录执行：
+
+~~~
+mkdir -p docker-data/instance docker-data/outputs
+docker compose build
+docker compose up -d
+docker compose ps
+~~~
+
+Mac 本机访问 http://127.0.0.1:7860/；局域网其他设备访问 http://<Mac 局域网 IP>:7860/。使用 ipconfig getifaddr en0 查看 Mac IP。首次 Docker 测试建议重新登录并重新生成测试素材，不要把当前调试用的 instance/ 或 outputs/ 映射到容器。
 
 ## 基本使用流程
 
-### 1. 登录
+1. 在登录窗口注册或登录网站账号；首次注册需要验证允许名单中的网易云账号。
+2. 在“02 选择歌曲”中输入歌曲 ID、网易云链接或歌名和歌手。
+3. 选择音质并下载完整素材。
+4. 在“04 生成 KTV 视频”中选择歌词、背景、扫色、分辨率和画质，然后加入队列。
+5. 在“03 投屏已有视频”中播放、下载或尝试投屏。
 
-先登录网站账号。首次点击“新建用户”时，需要验证一个在允许名单中的网易云账号；短信验证码为默认方式，也可切换二维码，Cookie JSON 导入位于下划线备用入口。网站账号与网易云账号一对一绑定，暂不支持换绑。
+视频由 CPU 渲染，1080p 或较长歌曲可能需要较长时间。生成期间不要重启容器。
 
-名单为空时，第一个成功注册的账号自动成为管理员。管理员可在右上角账号窗口管理名单，普通用户不能访问该功能。网站账号和网易云绑定数据保存在 `instance/`，请勿分享或提交到公开仓库。
+## Python 直接运行（开发和调试）
 
-网站账号登录后，即使网易云 Cookie 失效，仍可访问本地资源并尝试免费歌曲功能；需要网易云权益的操作会提示重新验证。
+Docker 是推荐的部署方式。需要调试源码时，也可以使用 Python 3.11 或更高版本。
 
-### 2. 选择歌曲
+Windows PowerShell：
 
-在“02 选择歌曲”中输入以下任一种内容：
+~~~
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe app.py
+~~~
 
-- 歌曲 ID，例如 `642810`；
-- 网易云歌曲链接；
-- 歌名和歌手，然后点击搜索结果。
+macOS / Linux：
 
-输入 ID 后需要点击“读取”或按 Enter。选中的歌曲会同步显示在后续区域。
+~~~
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python app.py
+~~~
 
-### 3. 下载素材
+直接运行时默认监听 0.0.0.0:7860。本机访问 http://127.0.0.1:7860/，局域网设备访问运行电脑的局域网 IP。直接运行使用 Flask 开发服务器，不适合公网部署。局域网 HTTPS 测试可以设置 CLOUDMUSIC2KTV_TLS_CERT 和 CLOUDMUSIC2KTV_TLS_KEY。
 
-选择音质后点击“下载全部素材”。视频预览和生成都需要先完成这一步。
+## 文件和数据
 
-如果歌曲需要 VIP 权益，必须使用有权完整播放这首歌的网易云账号。
+歌曲素材和视频保存在 outputs/<歌曲ID>_<歌手>_<歌名>/。网站账号、网易云绑定和会话保存在 instance/；Docker 部署时对应 docker-data/instance/。这些目录都不应提交到公开仓库或复制到 Docker 镜像。
 
-### 4. 生成视频
+## 常见问题和测试
 
-在“04 生成 KTV 视频”中选择歌词、背景、扫色、分辨率等选项，然后查看预览，最后点击“加入生成队列”。
+### Docker 构建超时
 
-任务提交后会锁定歌曲和设置。生成期间选择其他歌曲不会改变已经提交的任务。
+首次构建需要访问 Docker Hub、Debian 软件源和 PyPI。可以先执行：
 
-视频使用本地 CPU 渲染，1080p 或较长歌曲可能需要较长时间。不要在生成过程中关闭或重启后端服务。
+~~~
+docker pull python:3.11-slim-bookworm
+~~~
 
-### 5. 播放或投屏
-
-如果已有生成好的视频，可以在“03 投屏已有视频”中选择它并播放、下载或尝试投屏。
-
-投屏功能是否可用取决于浏览器、手机和局域网设备。最稳妥的方式是直接打开或下载生成的视频。
-
-## 文件位置
-
-歌曲素材和视频保存在：
-
-```text
-outputs/<歌曲ID>_<歌手>_<歌名>/
-```
-
-最终视频会保存在目录中，服务器内部文件名会带有选项标识以区分不同配置。点击“下载视频到本地”时，下载文件会自动改成易识别的名称，例如：
-
-```text
-ktv_1080p_作者_歌曲名.mp4
-ktv_720p_作者_歌曲名.mp4
-```
-
-歌词、封面、音频和预览图也会保存在同一目录。
-
-## 常见问题
-
-### 无法获取歌曲或音频
-
-确认网络正常、账号已登录，并确认账号有权完整播放该歌曲。必要时重新验证原绑定账号；可以使用短信验证码、二维码或下划线入口中的 Cookie 导入方式。
-
-### 提示没有本地素材
-
-先在 02 区选择歌曲并点击“下载全部素材”。仅读取歌曲信息不会下载音频。
+如果超时，应配置 Docker Desktop 或 Docker daemon 的网络代理。
 
 ### 生成速度较慢
 
-尝试使用 720p、较小文件画质，或关闭动态频谱。
+尝试 720p、较小画质或关闭动态频谱。生成期间不要重启容器。
 
-### 运行测试
+### 运行离线测试
 
-```powershell
+macOS / Linux：
+
+~~~
+.venv/bin/python -m pytest -q
+node --check static/app.js
+~~~
+
+Windows PowerShell：
+
+~~~
 .venv\Scripts\python.exe -m pytest -q
-```
+node --check static\app.js
+~~~
 
-开发者和后续 Agent 需要了解代码结构时，请阅读 [ARCHITECTURE.md](ARCHITECTURE.md)。
+开发者和后续维护者需要了解代码结构时，请阅读 ARCHITECTURE.md。
