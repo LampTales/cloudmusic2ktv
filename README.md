@@ -29,9 +29,18 @@ cloudmusic2ktv/
 
 ## 正式部署：直接拉取 GHCR 镜像
 
-这是服务器部署的推荐方式。服务器不需要完整源码，只需要下面的目录和文件：
+这是服务器部署的推荐方式。
 
-从本仓库根目录下载 `docker-compose.yml`（例如在 GitHub 的文件页面选择 **Raw** 保存），然后在服务器上创建 `.env` 和数据目录。
+在服务器上准备目录：
+
+```bash
+mkdir -p cloudmusic2ktv-deploy/docker-data/instance cloudmusic2ktv-deploy/docker-data/outputs
+cd cloudmusic2ktv-deploy
+# Linux 主机上容器以 UID 10001 运行；确保挂载目录可写
+sudo chown -R 10001:10001 docker-data
+```
+
+从本仓库根目录下载 `docker-compose.yml`，并创建 `.env` （可以`cp .env.example .env`），最终目录结构如下：
 
 ```text
 cloudmusic2ktv-deploy/
@@ -40,16 +49,6 @@ cloudmusic2ktv-deploy/
 └─ docker-data/
    ├─ instance/
    └─ outputs/
-```
-
-在服务器上准备目录（如果没有 `.env.example`，可以按下方内容手动创建 `.env`）：
-
-```bash
-mkdir -p cloudmusic2ktv-deploy/docker-data/instance cloudmusic2ktv-deploy/docker-data/outputs
-cd cloudmusic2ktv-deploy
-touch .env
-# Linux 主机上容器以 UID 10001 运行；确保挂载目录可写
-sudo chown -R 10001:10001 docker-data
 ```
 
 编辑 `.env`。本项目的 GHCR 镜像地址为 `ghcr.io/lamptales/cloudmusic2ktv`：
