@@ -741,8 +741,19 @@ def admin_add_user() -> Any:
     role = str(body.get("role") or "user").strip()
     if not user_id.isdigit() or int(user_id) <= 0:
         return error_response("用户 ID 无效", "invalid_user_id", 400)
-    with anonymous_netease_client() as client:
-        profile = client.user_detail(int(user_id))
+    # The search response already contains the profile fields needed by the
+    # allowlist.  NetEase's legacy user-detail endpoint is no longer available,
+    # so do not make a second upstream request here.
+    submitted_profile = body.get("profile")
+    if not isinstance(submitted_profile, dict):
+        return error_response("搜索结果已失效，请重新搜索后添加", "profile_required", 400)
+    if str(submitted_profile.get("userId") or submitted_profile.get("user_id") or "").strip() != user_id:
+        return error_response("用户资料与用户 ID 不匹配，请重新搜索", "profile_mismatch", 400)
+    profile = {
+        "userId": user_id,
+        "nickname": str(submitted_profile.get("nickname") or "网易云用户"),
+        "avatarUrl": str(submitted_profile.get("avatarUrl") or ""),
+    }
     entry = allowlist.add(profile, role, added_by=str(g.current_user["netease_user_id"]))
     return jsonify({"ok": True, "user": entry})
 

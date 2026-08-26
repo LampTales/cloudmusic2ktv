@@ -652,8 +652,9 @@ function renderAdminUserRow(user, removable) {
   copy.append(name, id);
   row.append(copy);
   const badge = document.createElement("span");
-  badge.className = "admin-role-badge";
-  badge.textContent = user.role === "admin" ? "管理员" : "普通用户";
+  const isAdmin = user.role === "admin";
+  badge.className = `admin-role-badge ${isAdmin ? "admin-role-admin" : "admin-role-user"}`;
+  badge.textContent = isAdmin ? "管理" : "用户";
   row.append(badge);
   if (removable && user.role !== "admin") {
     const remove = document.createElement("button");
@@ -709,7 +710,11 @@ async function addAdminUser(user, button) {
   try {
     await api("/api/admin/users", {
       method: "POST",
-      body: JSON.stringify({userId: user.userId, role: $("#adminUserRole").value}),
+      body: JSON.stringify({
+        userId: user.userId,
+        role: $("#adminUserRole").value,
+        profile: {userId: user.userId, nickname: user.nickname, avatarUrl: user.avatarUrl},
+      }),
     });
     notify(`已添加 ${user.nickname || "网易云用户"}`);
     await refreshAdminUsers();
