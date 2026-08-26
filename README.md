@@ -223,6 +223,7 @@ docker pull python:3.11-slim-bookworm
 macOS / Linux：
 
 ~~~
+.venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -q
 node --check static/app.js
 ~~~
@@ -230,6 +231,7 @@ node --check static/app.js
 Windows PowerShell：
 
 ~~~
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .venv\Scripts\python.exe -m pytest -q
 node --check static\app.js
 ~~~
