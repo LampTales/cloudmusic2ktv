@@ -710,7 +710,11 @@ async function addAdminUser(user, button) {
   try {
     await api("/api/admin/users", {
       method: "POST",
-      body: JSON.stringify({userId: user.userId, role: $("#adminUserRole").value}),
+      body: JSON.stringify({
+        userId: user.userId,
+        role: $("#adminUserRole").value,
+        profile: {userId: user.userId, nickname: user.nickname, avatarUrl: user.avatarUrl},
+      }),
     });
     notify(`已添加 ${user.nickname || "网易云用户"}`);
     await refreshAdminUsers();

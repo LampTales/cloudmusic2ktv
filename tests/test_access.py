@@ -155,6 +155,27 @@ def test_admin_user_search_uses_the_bound_client(monkeypatch, tmp_path):
     assert response.get_json()["users"][0]["userId"] == 202
 
 
+def test_admin_user_add_uses_search_profile_without_detail_request(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="1", role="admin")
+
+    def unexpected_detail_request():
+        raise AssertionError("admin add should not call the retired detail endpoint")
+
+    monkeypatch.setattr(NeteaseClient, "user_detail", unexpected_detail_request)
+
+    response = client.post(
+        "/api/admin/users",
+        json={
+            "userId": "202",
+            "role": "user",
+            "profile": {"userId": 202, "nickname": "待添加用户", "avatarUrl": ""},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["user"]["userId"] == "202"
+
+
 def test_member_can_check_bound_netease_cookie(monkeypatch, tmp_path):
     client = member_client(monkeypatch, tmp_path, user_id="2")
     bindings = NeteaseBindingStore(tmp_path / "bindings.json")
