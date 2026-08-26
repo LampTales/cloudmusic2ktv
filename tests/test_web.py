@@ -4,6 +4,7 @@ import app as web_app
 from cloudmusic2ktv.access import AllowlistStore
 from cloudmusic2ktv.netease import NeteaseClient
 from cloudmusic2ktv.sessions import FileSessionStore
+from tests.helpers import set_session_cookie
 
 
 def member_client(monkeypatch, tmp_path, *, user_id="2", role="user"):
@@ -24,7 +25,7 @@ def member_client(monkeypatch, tmp_path, *, user_id="2", role="user"):
     monkeypatch.setattr(web_app, "auth_sessions", sessions)
     monkeypatch.setattr(web_app, "allowlist", users)
     client = web_app.app.test_client()
-    client.set_cookie("localhost", "cloudmusic2ktv_session", token)
+    set_session_cookie(client, token)
     return client
 
 

@@ -4,6 +4,7 @@ from cloudmusic2ktv.access import AllowlistStore
 from cloudmusic2ktv.accounts import NeteaseBindingStore, WebsiteAccountStore
 from cloudmusic2ktv.netease import NeteaseClient, NeteaseError
 from cloudmusic2ktv.sessions import FileSessionStore
+from tests.helpers import set_session_cookie
 
 
 def member_client(monkeypatch, tmp_path, *, user_id="2", role="user"):
@@ -24,7 +25,7 @@ def member_client(monkeypatch, tmp_path, *, user_id="2", role="user"):
     monkeypatch.setattr(web_app, "auth_sessions", sessions)
     monkeypatch.setattr(web_app, "allowlist", users)
     client = web_app.app.test_client()
-    client.set_cookie("localhost", "cloudmusic2ktv_session", token)
+    set_session_cookie(client, token)
     return client
 
 
@@ -100,7 +101,7 @@ def test_admin_can_list_and_delete_regular_users_but_not_admins(monkeypatch, tmp
             "avatarUrl": "",
         }
     client = web_app.app.test_client()
-    client.set_cookie("localhost", "cloudmusic2ktv_session", token)
+    set_session_cookie(client, token)
 
     listed = client.get("/api/admin/users")
     assert listed.status_code == 200
@@ -129,7 +130,7 @@ def test_regular_member_cannot_access_admin_routes(monkeypatch, tmp_path):
             "avatarUrl": "",
         }
     client = web_app.app.test_client()
-    client.set_cookie("localhost", "cloudmusic2ktv_session", token)
+    set_session_cookie(client, token)
 
     response = client.get("/api/admin/users")
     assert response.status_code == 403
