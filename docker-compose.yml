@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     image: ${CLOUDMUSIC2KTV_IMAGE:-cloudmusic2ktv:local}
     ports:
-      # LAN test: open http://<Mac-IP>:7860/
+      # LAN test: open http://<host-ip>:7860/
       # Behind a reverse proxy, bind this to 127.0.0.1:7860:7860 instead.
       - "${CLOUDMUSIC2KTV_BIND_ADDRESS:-0.0.0.0}:7860:7860"
     environment:

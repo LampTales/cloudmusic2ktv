@@ -6,7 +6,31 @@ on:
       - main
     tags:
       - "v*.*.*"
+    paths:
+      - "**.py"
+      - "cloudmusic2ktv/**"
+      - "static/**"
+      - "templates/**"
+      - "tests/**"
+      - "requirements*.txt"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - ".env.example"
+      - ".github/workflows/**"
   pull_request:
+    paths:
+      - "**.py"
+      - "cloudmusic2ktv/**"
+      - "static/**"
+      - "templates/**"
+      - "tests/**"
+      - "requirements*.txt"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - ".env.example"
+      - ".github/workflows/**"
 
 permissions:
   contents: read

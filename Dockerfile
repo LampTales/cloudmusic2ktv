@@ -20,8 +20,6 @@ COPY app.py ./app.py
 COPY cloudmusic2ktv ./cloudmusic2ktv
 COPY static ./static
 COPY templates ./templates
-COPY README.md ./README.md
-COPY ARCHITECTURE.md ./ARCHITECTURE.md
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin app \
     && mkdir -p /app/instance /app/outputs \

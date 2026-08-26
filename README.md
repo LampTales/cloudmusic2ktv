@@ -1,239 +1,233 @@
 # CloudMusic2KTV
 
-CloudMusic2KTV 是一个将用户有权访问的网易云歌曲素材转换为带封面、歌词和频谱效果的 KTV 风格视频，并通过网页播放或投屏的自托管工具。
+CloudMusic2KTV 将选定的网易云音乐歌曲制作成带歌词的 KTV 视频，并提供网页播放和投屏所需的 HTTP 接口。项目适合在局域网或带 HTTPS 反向代理的服务器上运行。
 
-推荐使用 Docker 部署。项目也保留 Python 直接运行方式，适合开发、排查问题和本地调试。
+使用网易云音乐内容时，请遵守当地法律、平台条款和版权方要求。本项目不提供或分发音乐版权；部署者需要自行确认账号、下载和公开访问的合规性。
 
-请只处理你有权访问的歌曲，并仅用于个人或获授权的使用场景。本项目不绕过网易云音乐的付费或播放权限；音频、歌词、封面和生成视频可能受到版权及服务条款限制。
+## 仓库结构
 
-## 正式部署：Docker + HTTPS 反向代理
+```text
+cloudmusic2ktv/
+├─ Dockerfile                 Docker 镜像构建文件
+├─ docker-compose.yml         Docker Compose 服务定义（仓库根目录）
+├─ .env.example               Compose 配置模板（仓库根目录）
+├─ .dockerignore              Docker 构建上下文排除规则
+├─ .github/workflows/docker.yml  CI、测试和镜像构建
+├─ app.py                     Flask 应用入口
+├─ cloudmusic2ktv/             业务代码
+├─ static/                     前端静态资源
+├─ templates/                  HTML 模板
+├─ tests/                      自动化测试
+├─ instance/                   Python 直接运行时数据（本地生成，不提交）
+├─ outputs/                    Python 直接运行时媒体（本地生成，不提交）
+└─ docker-data/                Docker 挂载的数据目录（本地生成，不提交）
+   ├─ instance/
+   └─ outputs/
+```
 
-### 运行要求
+`docker-compose.yml` 和 `.env.example` 位于仓库根目录。`instance/`、`outputs/` 和 `docker-data/` 是运行数据，不需要放进镜像，也不应提交到 Git。
 
-- 一台 Linux 服务器（有公网 IP，或能被域名解析到）；
-- Docker Engine 和 Docker Compose Plugin；
-- 一个已经配置 DNS 的域名；
-- Nginx、Caddy 或其他能够提供 HTTPS 的反向代理；
-- 服务器能够访问 Docker Registry。只有选择“服务器自行构建”时，才需要额外访问 Debian 软件源和 PyPI。
+## 正式部署：直接拉取 GHCR 镜像
 
-正式部署不需要在服务器上安装 Python。Docker 镜像会包含 Python、FFmpeg、Noto CJK 字体和项目依赖。
+这是服务器部署的推荐方式。服务器不需要完整源码，只需要下面的目录和文件：
 
-### 1. 准备运行目录和配置
+从本仓库根目录下载 `docker-compose.yml`（例如在 GitHub 的文件页面选择 **Raw** 保存），然后在服务器上创建 `.env` 和数据目录。
 
-直接拉取镜像时，服务器不需要完整源码，只需要 `docker-compose.yml`、一个用于配置的 `.env` 文件和运行数据目录。可以同时取得仓库中的 `.env.example` 作为模板，也可以直接创建 `.env`：
+```text
+cloudmusic2ktv-deploy/
+├─ docker-compose.yml
+├─ .env
+└─ docker-data/
+   ├─ instance/
+   └─ outputs/
+```
 
-~~~
-mkdir -p cloudmusic2ktv/docker-data/instance cloudmusic2ktv/docker-data/outputs
-cd cloudmusic2ktv
-cp .env.example .env
-~~~
+在服务器上准备目录（如果没有 `.env.example`，可以按下方内容手动创建 `.env`）：
 
-如果没有取得 `.env.example`，可以直接创建 `.env`：
-
-~~~
+```bash
+mkdir -p cloudmusic2ktv-deploy/docker-data/instance cloudmusic2ktv-deploy/docker-data/outputs
+cd cloudmusic2ktv-deploy
 touch .env
-~~~
+# Linux 主机上容器以 UID 10001 运行；确保挂载目录可写
+sudo chown -R 10001:10001 docker-data
+```
 
-然后按照下面的示例填写镜像地址、子路径和反代设置。
+编辑 `.env`。本项目的 GHCR 镜像地址为 `ghcr.io/lamptales/cloudmusic2ktv`：
 
-如果应用发布在域名的 /ktv/ 子路径，.env 使用：
-
-~~~
-CLOUDMUSIC2KTV_IMAGE=ghcr.io/<OWNER>/<REPOSITORY>:latest
+```dotenv
+CLOUDMUSIC2KTV_IMAGE=ghcr.io/lamptales/cloudmusic2ktv:latest
 CLOUDMUSIC2KTV_BASE_PATH=/ktv
 CLOUDMUSIC2KTV_TRUST_PROXY=1
 CLOUDMUSIC2KTV_BIND_ADDRESS=127.0.0.1
-~~~
+```
 
-BASE_PATH 是应用所在的 URL 前缀；TRUST_PROXY=1 只在完全控制反向代理时启用；BIND_ADDRESS=127.0.0.1 可避免容器端口直接暴露到公网。新安装时，建议先暂时只允许内网访问，完成管理员初始化后再开放公网。
+如果需要固定到某一次构建，可以使用提交 SHA 标签，例如：
 
-### 2. 方案 A：直接拉取 GitHub Container Registry 镜像（推荐）
+```dotenv
+CLOUDMUSIC2KTV_IMAGE=ghcr.io/lamptales/cloudmusic2ktv:sha-04a1235
+```
 
-GitHub Actions 会在 `main` 更新后构建并推送 `latest` 镜像。服务器上执行：
+如果服务直接通过服务器端口访问而不是挂在子路径下，将 `CLOUDMUSIC2KTV_BASE_PATH` 设为空，将 `CLOUDMUSIC2KTV_TRUST_PROXY` 设为 `0`，并按需要调整绑定地址。
 
-~~~
+公开 GHCR 镜像可直接拉取。私有镜像先登录：
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u <GITHUB_USER> --password-stdin
+```
+
+启动服务：
+
+```bash
 docker compose pull
 docker compose up -d --no-build
 docker compose ps
-~~~
+docker compose logs -f cloudmusic2ktv
+```
 
-如果 GHCR 镜像是私有的，先使用具有 `read:packages` 权限的 Token 登录：
+### 反向代理到域名子路径
 
-~~~
-docker login ghcr.io
-~~~
+例如服务公开地址为 `https://example.com/ktv/`，容器只监听服务器本机的 `127.0.0.1:7860`。Nginx 可使用类似配置（按实际证书和域名调整）：
 
-该方式不需要在服务器上安装 Python，也不会把网易云 Cookie 或本地媒体放进镜像。
-
-### 3. 方案 B：服务器从源码自行构建
-
-如果不想使用 GHCR，或需要部署尚未推送到镜像仓库的代码：
-
-~~~
-git clone <你的仓库地址> cloudmusic2ktv
-cd cloudmusic2ktv
-cp .env.example .env
-~~~
-
-确认 `.env` 中使用：
-
-~~~
-CLOUDMUSIC2KTV_IMAGE=cloudmusic2ktv:local
-~~~
-
-然后执行：
-
-~~~
-mkdir -p docker-data/instance docker-data/outputs
-docker compose build
-docker compose up -d
-docker compose ps
-~~~
-
-只需要传递代码和 Docker 文件。不要复制本地的 instance/、outputs/、docker-data/、.env 或 .venv/；其中可能包含网站账号、网易云 Cookie、会话和本地媒体。
-
-两种方式都会把账号、网易云绑定、歌曲素材和生成视频保存在 `docker-data/`，该目录不会被复制进镜像，也不会因为重新构建镜像而删除。
-
-查看日志或停止服务：
-
-~~~
-docker compose logs -f
-docker compose down
-~~~
-
-### 4. 配置 Nginx 子路径反代
-
-假设访问地址为 https://example.com/ktv/：
-
-~~~nginx
+```nginx
 location /ktv/ {
+    # The trailing slash removes /ktv/ before forwarding to Flask.
     proxy_pass http://127.0.0.1:7860/;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Forwarded-Prefix /ktv;
-    client_max_body_size 32m;
-    proxy_read_timeout 300s;
+    proxy_read_timeout 3600;
+    proxy_send_timeout 3600;
 }
-~~~
+```
 
-proxy_pass 末尾的 / 很重要：它会把 /ktv 剥离后转发到容器。反向代理必须覆盖而不是信任客户端传入的 X-Forwarded-* 请求头，并负责 HTTPS 证书。
+`CLOUDMUSIC2KTV_BASE_PATH=/ktv` 必须与代理的 `location` 前缀一致，并保留结尾 `/` 的访问形式。只有在反向代理可信且确实覆盖转发请求头时才设置 `CLOUDMUSIC2KTV_TRUST_PROXY=1`。
 
-应用会自动让 API、静态资源、视频链接和会话 Cookie 跟随 /ktv 前缀。未使用反向代理时不要设置 CLOUDMUSIC2KTV_TRUST_PROXY=1。
+### 公网部署前检查
 
-### 5. 完成初始化和更新
+- 只通过 HTTPS 域名提供访问，不要把容器端口直接暴露到公网；
+- `CLOUDMUSIC2KTV_BIND_ADDRESS=127.0.0.1`，并在防火墙中限制 7860 端口；
+- `docker-data/instance` 保存网站密码哈希、会话和网易云绑定 Cookie，必须限制文件权限并纳入安全备份；
+- 第一个成功注册的网易云账号会成为管理员。完成初始化后，只把朋友的网易云账号加入允许名单，不要把管理入口和 Cookie 分享给他人；
+- 应用本身不是完整的公网 SaaS 防护层，建议在反向代理或防火墙增加访问控制、日志和必要的限流。
 
-通过 HTTPS 打开网页后，先使用自己的网易云账号注册并确认成为管理员，再添加朋友账号。网易云 Cookie 保存在服务器的 docker-data/instance/ 中，服务器管理员可以读取该目录。
+## 备用方式：服务器从源码构建
 
-使用 GHCR 镜像更新时，等待当前视频生成任务完成并备份数据：
+需要安装 Git、Docker 和 Docker Compose 插件：
 
-~~~
+```bash
+git clone https://github.com/lamptales/cloudmusic2ktv.git cloudmusic2ktv
+cd cloudmusic2ktv
+cp .env.example .env
+```
+
+编辑 `.env`（公网子路径部署通常使用上一节的值），然后构建并启动：
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+如果要明确使用本地镜像，可在 `.env` 中设置：
+
+```dotenv
+CLOUDMUSIC2KTV_IMAGE=cloudmusic2ktv:local
+```
+
+## 更新、回滚和数据
+
+GHCR 镜像部署更新：
+
+```bash
 docker compose pull
 docker compose up -d --no-build
-~~~
+```
 
-如果使用源码构建，则执行：
+源码部署更新：
 
-~~~
+```bash
 git pull
 docker compose build
 docker compose up -d
-~~~
+```
 
-当前视频任务只保存在 Python 进程内，重启会丢失队列状态并中断正在生成的视频。
+`docker-data/instance` 和 `docker-data/outputs` 是宿主机挂载目录，更新镜像不会删除其中的数据。重建或重启会中断正在执行的视频任务；需要回滚时，将 `.env` 中的镜像标签改为历史 SHA 或版本标签，再执行 `docker compose pull && docker compose up -d --no-build`。
 
 ## Docker 局域网调试
 
-这一步适合先在 macOS Docker Desktop 上验证 Linux 容器行为。
+局域网测试时，在仓库根目录创建 `.env`，使用：
 
-确保 .env 中保持：
-
-~~~
+```dotenv
+CLOUDMUSIC2KTV_IMAGE=cloudmusic2ktv:local
 CLOUDMUSIC2KTV_BASE_PATH=
 CLOUDMUSIC2KTV_TRUST_PROXY=0
 CLOUDMUSIC2KTV_BIND_ADDRESS=0.0.0.0
-~~~
+```
 
-在项目根目录执行：
+然后执行：
 
-~~~
-mkdir -p docker-data/instance docker-data/outputs
+```bash
 docker compose build
 docker compose up -d
-docker compose ps
-~~~
+docker compose logs -f cloudmusic2ktv
+```
 
-Mac 本机访问 http://127.0.0.1:7860/；局域网其他设备访问 http://<Mac 局域网 IP>:7860/。使用 ipconfig getifaddr en0 查看 Mac IP。首次 Docker 测试建议重新登录并重新生成测试素材，不要把当前调试用的 instance/ 或 outputs/ 映射到容器。
+本机访问 `http://127.0.0.1:7860/`；同一局域网的其他设备访问运行 Docker 主机的局域网 IP。停止服务：
 
-## 基本使用流程
+```bash
+docker compose down
+```
 
-1. 在登录窗口注册或登录网站账号；首次注册需要验证允许名单中的网易云账号。
-2. 在“02 选择歌曲”中输入歌曲 ID、网易云链接或歌名和歌手。
-3. 选择音质并下载完整素材。
-4. 在“04 生成 KTV 视频”中选择歌词、背景、扫色、分辨率和画质，然后加入队列。
-5. 在“03 投屏已有视频”中播放、下载或尝试投屏。
+## 基本使用
 
-视频由 CPU 渲染，1080p 或较长歌曲可能需要较长时间。生成期间不要重启容器。
+打开网页后登录网易云音乐，选择歌曲并下载所需素材，等待视频生成完成后播放。投屏时让播放设备和运行服务的主机处于可互相访问的网络中；公网部署则通过 HTTPS 域名访问。
 
-## Python 直接运行（开发和调试）
+## Python 直接运行（开发调试）
 
-Docker 是推荐的部署方式。需要调试源码时，也可以使用 Python 3.11 或更高版本。
+Docker 不是开发调试的唯一方式。需要 Python 3.11、FFmpeg 和可用字体；依赖安装：
 
 Windows PowerShell：
 
-~~~
+```powershell
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe app.py
-~~~
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
+python app.py
+```
 
-macOS / Linux：
+macOS/Linux：
 
-~~~
+```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python app.py
-~~~
+. .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+python app.py
+```
 
-直接运行时默认监听 0.0.0.0:7860。本机访问 http://127.0.0.1:7860/，局域网设备访问运行电脑的局域网 IP。直接运行使用 Flask 开发服务器，不适合公网部署。局域网 HTTPS 测试可以设置 CLOUDMUSIC2KTV_TLS_CERT 和 CLOUDMUSIC2KTV_TLS_KEY。
+默认监听 `http://127.0.0.1:7860/`。本地运行产生的 `instance/` 和 `outputs/` 不要提交到 Git。
 
-## 文件和数据
+## 测试和 GitHub Actions CI
 
-歌曲素材和视频保存在 outputs/<歌曲ID>_<歌手>_<歌名>/。网站账号、网易云绑定和会话保存在 instance/；Docker 部署时对应 docker-data/instance/。这些目录都不应提交到公开仓库或复制到 Docker 镜像。
+本地运行测试：
 
-## 常见问题和测试
+```bash
+python -m pytest -q
+```
 
-### Docker 构建超时
+`.github/workflows/docker.yml` 会在代码、依赖、测试或 Docker 配置变化时运行测试并构建镜像：
 
-首次构建需要访问 Docker Hub、Debian 软件源和 PyPI。可以先执行：
+- `main` 分支推送会构建并推送 `latest` 和提交 SHA 标签到 GHCR；
+- `v*.*.*` 标签推送会额外生成对应版本标签；
+- Pull Request 只测试和构建，不推送镜像；
+- 仅修改 `README.md`、`ARCHITECTURE.md` 等未列入路径过滤的文档不会触发该工作流；
+- 提交信息包含 `[skip ci]` 或 `[ci skip]` 时可跳过本次工作流。
 
-~~~
-docker pull python:3.11-slim-bookworm
-~~~
+镜像由 CI 构建为 `linux/amd64` 和 `linux/arm64`，便于常见服务器和开发机使用。
 
-如果超时，应配置 Docker Desktop 或 Docker daemon 的网络代理。
+## 常见问题
 
-### 生成速度较慢
-
-尝试 720p、较小画质或关闭动态频谱。生成期间不要重启容器。
-
-### 运行离线测试
-
-macOS / Linux：
-
-~~~
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pytest -q
-node --check static/app.js
-~~~
-
-Windows PowerShell：
-
-~~~
-.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.venv\Scripts\python.exe -m pytest -q
-node --check static\app.js
-~~~
-
-开发者和后续维护者需要了解代码结构时，请阅读 ARCHITECTURE.md。
+- **拉取镜像超时**：确认 Docker 守护进程能访问 Docker Hub/GHCR；必要时为 Docker Desktop 或服务器 Docker 配置代理或镜像源。
+- **反代后资源路径错误**：检查 `CLOUDMUSIC2KTV_BASE_PATH` 是否与代理前缀完全一致，并确认代理发送 `X-Forwarded-*` 请求头。
+- **视频生成失败**：查看 `docker compose logs -f cloudmusic2ktv`，确认 `docker-data/outputs` 可写且磁盘空间充足。
+- **字体或 FFmpeg 问题**：官方镜像已安装 FFmpeg 和 Noto CJK/DejaVu 字体；Python 直接运行时请自行安装对应系统依赖。
