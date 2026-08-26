@@ -42,17 +42,45 @@ INSTANCE = ROOT / "instance"
 OUTPUTS = ROOT / "outputs"
 SESSION_COOKIE = "cloudmusic2ktv_session"
 SESSION_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_SESSION_DAYS", "90")) * 24 * 60 * 60
+
+
+def normalize_base_path(value: str | None) -> str:
+    """Normalize the URL prefix used by a trusted reverse proxy."""
+    text = str(value or "").strip()
+    if not text or text == "/":
+        return ""
+    if "?" in text or "#" in text or "\\" in text:
+        raise RuntimeError("CLOUDMUSIC2KTV_BASE_PATH 只能包含 URL 路径")
+    if not text.startswith("/"):
+        text = "/" + text
+    text = "/" + "/".join(part for part in text.split("/") if part)
+    if any(part in {".", ".."} for part in text.split("/")):
+        raise RuntimeError("CLOUDMUSIC2KTV_BASE_PATH 不能包含 . 或 ..")
+    return text.rstrip("/")
+
+
+BASE_PATH = normalize_base_path(os.environ.get("CLOUDMUSIC2KTV_BASE_PATH"))
+SESSION_COOKIE_PATH = BASE_PATH or "/"
 VIDEO_ARTIFACT = re.compile(
     r"^(?:video_preview(?:_[0-9a-f]{12})?\.png|ktv_(?:1080p|720p)(?:_[0-9a-f]{12})?\.mp4)$"
 )
 VIDEO_FILE = re.compile(r"^ktv_(1080p|720p)(?:_[0-9a-f]{12})?\.mp4$")
 
 app = Flask(__name__, instance_path=str(INSTANCE), instance_relative_config=True)
-app.config.update(MAX_CONTENT_LENGTH=32 * 1024 * 1024)
+app.config.update(
+    MAX_CONTENT_LENGTH=32 * 1024 * 1024,
+    APPLICATION_ROOT=BASE_PATH or "/",
+)
 app.json.ensure_ascii = False
 if os.environ.get("CLOUDMUSIC2KTV_TRUST_PROXY") == "1":
     # Only enable this when the app is behind a controlled reverse proxy.
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=1,
+        x_proto=1,
+        x_host=1,
+        x_prefix=1,
+    )
 
 auth_sessions = FileSessionStore(INSTANCE / "sessions", ttl_seconds=SESSION_TTL_SECONDS)
 allowlist = AllowlistStore(INSTANCE / "allowlist.json")
@@ -66,6 +94,13 @@ cookie_import_last_attempt: dict[str, float] = {}
 auth_sessions.cleanup_expired()
 
 
+@app.context_processor
+def inject_runtime_url_config() -> dict[str, str]:
+    """Expose the effective script root to the subpath-aware frontend."""
+    script_root = request.script_root.rstrip("/") or BASE_PATH
+    return {"cloudmusic2ktv_base_path": script_root}
+
+
 def authorized_identity(*, admin: bool = False) -> tuple[dict[str, Any] | None, Any | None]:
     token = auth_token()
     with auth_sessions.open(token, touch=True) as session:
@@ -77,7 +112,7 @@ def authorized_identity(*, admin: bool = False) -> tuple[dict[str, Any] | None, 
     if role is None:
         auth_sessions.delete(session_token)
         response, status_code = error_response("该账号已不在允许名单中", "not_allowed", 403)
-        response.delete_cookie(SESSION_COOKIE, path="/", samesite="Lax")
+        response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
         return None, (response, status_code)
     if admin and role != "admin":
         return None, error_response("只有管理员可以执行此操作", "admin_required", 403)
@@ -114,6 +149,12 @@ def index() -> str:
     return render_template("index.html")
 
 
+@app.get("/api/healthz")
+def healthz() -> Any:
+    """Unauthenticated liveness endpoint for Docker and reverse proxies."""
+    return jsonify({"ok": True, "status": "healthy"})
+
+
 @app.get("/api/status")
 def status() -> Any:
     expired_token = None
@@ -145,7 +186,7 @@ def status() -> Any:
     if expired_token is not None:
         auth_sessions.delete(expired_token)
         response = jsonify(result)
-        response.delete_cookie(SESSION_COOKIE, path="/", samesite="Lax")
+        response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
         return response
     return jsonify(result)
 
@@ -409,7 +450,7 @@ def register() -> Any:
     if rejected:
         auth_sessions.delete(previous_token)
         response, status_code = error_response("该网易云账号不在允许名单中", "not_allowed", 403)
-        response.delete_cookie(SESSION_COOKIE, path="/", samesite="Lax")
+        response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
         return response, status_code
     token = auth_sessions.rotate(previous_token)
     response = jsonify({"ok": True, "message": "网站账号创建成功", "profile": account, "role": role})
@@ -513,7 +554,7 @@ def logout() -> Any:
             session.profile = None
     auth_sessions.delete(token)
     response = jsonify({"ok": True, "message": "已退出登录并删除本地会话"})
-    response.delete_cookie(SESSION_COOKIE, path="/", samesite="Lax")
+    response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
     return response
 
 
@@ -759,7 +800,7 @@ def set_auth_cookie(response: Any, token: str) -> None:
         httponly=True,
         secure=request.is_secure,
         samesite="Lax",
-        path="/",
+        path=SESSION_COOKIE_PATH,
     )
 
 

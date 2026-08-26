@@ -64,6 +64,20 @@ def test_unknown_route_remains_404():
     assert response.status_code == 404
 
 
+def test_health_endpoint_is_public_for_container_checks():
+    response = web_app.app.test_client().get("/api/healthz")
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True, "status": "healthy"}
+
+
+def test_base_path_normalization():
+    assert web_app.normalize_base_path("") == ""
+    assert web_app.normalize_base_path("ktv/") == "/ktv"
+    assert web_app.normalize_base_path("/ktv/app/") == "/ktv/app"
+    with pytest.raises(RuntimeError):
+        web_app.normalize_base_path("/ktv?x=1")
+
+
 def test_video_submission_requires_a_logged_in_browser_session():
     response = web_app.app.test_client().post(
         "/api/video/render", json={"song": 123, "options": {}}

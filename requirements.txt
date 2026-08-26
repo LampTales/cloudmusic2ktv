@@ -4,3 +4,4 @@ cryptography>=39,<47
 Pillow>=9.4,<12
 numpy>=1.24,<3
 imageio-ffmpeg>=0.5,<1
+gunicorn>=21,<24

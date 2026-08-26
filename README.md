@@ -58,6 +58,67 @@ $env:CLOUDMUSIC2KTV_HOST = "127.0.0.1"
 
 关闭运行 `app.py` 的终端即可停止服务。
 
+## Docker 局域网测试
+
+仓库已经提供 `Dockerfile` 和 `docker-compose.yml`。Docker 构建上下文会通过
+`.dockerignore` 排除 `instance/`、`outputs/`、`.venv/` 和日志；运行数据使用
+项目下的 `docker-data/` 持久化目录，不会覆盖当前调试用的数据。
+
+在安装了 Docker Desktop 的 macOS 上，在项目根目录执行：
+
+```bash
+mkdir -p docker-data/instance docker-data/outputs
+docker compose build
+docker compose up -d
+docker compose ps
+```
+
+然后在 Mac 本机打开 `http://127.0.0.1:7860/`，局域网其他设备打开
+`http://<Mac 局域网 IP>:7860/`。停止服务：
+
+```bash
+docker compose down
+```
+
+不要把当前调试用的 `instance/` 或 `outputs/` 映射到容器；其中可能包含账号、网易云 Cookie 和本地媒体。首次 Docker 测试应在网页中重新登录并生成测试素材。
+
+### 子路径反向代理配置
+
+如果反向代理将应用发布在 `https://example.com/ktv/`，在项目根目录创建 `.env`：
+
+```dotenv
+CLOUDMUSIC2KTV_BASE_PATH=/ktv
+CLOUDMUSIC2KTV_TRUST_PROXY=1
+```
+
+反向代理需要移除 `/ktv` 后再转发，并覆盖而不是追加以下头：
+
+```text
+X-Forwarded-Proto: https
+X-Forwarded-Host: example.com
+X-Forwarded-Prefix: /ktv
+```
+
+例如 Nginx 可以使用以下 location（末尾的 `/` 会把 `/ktv` 剥离后再转发）：
+
+```nginx
+location /ktv/ {
+    proxy_pass http://127.0.0.1:7860/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Prefix /ktv;
+    client_max_body_size 32m;
+    proxy_read_timeout 300s;
+}
+```
+
+当前前端会从 Flask 的脚本根路径生成 API URL，视频链接和静态资源也会跟随该前缀。`CLOUDMUSIC2KTV_TRUST_PROXY=1` 只可用于你完全控制的反向代理；直接局域网 HTTP 测试时保持为 `0`。
+
+正式由同机反代访问时，可在 `.env` 中将 `CLOUDMUSIC2KTV_BIND_ADDRESS` 改为
+`127.0.0.1`，避免把容器端口直接暴露到公网。
+
 ## 基本使用流程
 
 ### 1. 登录

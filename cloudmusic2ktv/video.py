@@ -4,7 +4,9 @@ import colorsys
 import hashlib
 import json
 import math
+import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -917,6 +919,15 @@ def video_options_fingerprint(options: VideoOptions) -> str:
 
 
 def get_ffmpeg_executable() -> str:
+    configured = os.environ.get("CLOUDMUSIC2KTV_FFMPEG", "").strip()
+    if configured:
+        executable = Path(configured).expanduser()
+        if executable.is_file():
+            return str(executable)
+        raise VideoError(f"CLOUDMUSIC2KTV_FFMPEG 指向的文件不存在：{executable}")
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg:
+        return system_ffmpeg
     try:
         import imageio_ffmpeg
     except ImportError as exc:
@@ -1050,27 +1061,65 @@ def _font_path(bold: bool, text: str | None = None) -> Path:
     text = text or ""
     contains_kana = any("\u3040" <= char <= "\u30ff" for char in text)
     contains_cjk = any("\u3400" <= char <= "\u9fff" for char in text)
-    if contains_cjk and not contains_kana:
-        candidates = [Path(r"C:\Windows\Fonts\msyhbd.ttc" if bold else r"C:\Windows\Fonts\msyh.ttc")]
-    elif contains_kana:
-        candidates = [
-            Path(r"C:\Windows\Fonts\YuGothB.ttc" if bold else r"C:\Windows\Fonts\YuGothM.ttc"),
-            Path(r"C:\Windows\Fonts\meiryob.ttc" if bold else r"C:\Windows\Fonts\meiryo.ttc"),
-        ]
-    else:
-        candidates = []
-    candidates.extend(
+
+    configured_dir = os.environ.get("CLOUDMUSIC2KTV_FONT_DIR", "").strip()
+    font_dirs = [Path(configured_dir).expanduser()] if configured_dir else []
+    font_dirs.extend(
         [
-            Path(r"C:\Windows\Fonts\msyhbd.ttc" if bold else r"C:\Windows\Fonts\msyh.ttc"),
-            Path(r"C:\Windows\Fonts\YuGothB.ttc" if bold else r"C:\Windows\Fonts\YuGothM.ttc"),
-            Path(r"C:\Windows\Fonts\meiryob.ttc" if bold else r"C:\Windows\Fonts\meiryo.ttc"),
+            Path("/usr/share/fonts/opentype/noto"),
+            Path("/usr/share/fonts/truetype/noto"),
+            Path("/Library/Fonts"),
+            Path("/System/Library/Fonts"),
+            Path(r"C:\Windows\Fonts"),
         ]
     )
-    candidates.append(Path(r"C:\Windows\Fonts\arial.ttf"))
+
+    regular_names = [
+        "NotoSansCJK-Regular.ttc",
+        "NotoSansCJKsc-Regular.otf",
+        "NotoSansCJKjp-Regular.otf",
+        "NotoSansSC-Regular.otf",
+        "PingFang.ttc",
+        "Hiragino Sans GB.ttc",
+        "Hiragino Sans.ttc",
+        "msyh.ttc",
+        "YuGothM.ttc",
+        "meiryo.ttc",
+        "Arial Unicode.ttf",
+        "arial.ttf",
+        "DejaVuSans.ttf",
+    ]
+    bold_names = [
+        "NotoSansCJK-Bold.ttc",
+        "NotoSansCJKsc-Bold.otf",
+        "NotoSansCJKjp-Bold.otf",
+        "NotoSansSC-Bold.otf",
+        "PingFang.ttc",
+        "Hiragino Sans GB.ttc",
+        "Hiragino Sans.ttc",
+        "msyhbd.ttc",
+        "YuGothB.ttc",
+        "meiryob.ttc",
+        "Arial Unicode.ttf",
+        "arialbd.ttf",
+        "DejaVuSans-Bold.ttf",
+    ]
+    names = bold_names if bold else regular_names
+
+    def find(names_to_check: list[str]) -> list[Path]:
+        return [directory / name for directory in font_dirs for name in names_to_check]
+
+    candidates = []
+    if contains_cjk and not contains_kana:
+        candidates.extend(find(names))
+    elif contains_kana:
+        candidates.extend(find(names))
+    candidates.extend(find(names))
     for path in candidates:
         if path.exists():
             return path
-    raise VideoError("没有找到支持中日文的系统字体")
+    configured_hint = f"，请检查 CLOUDMUSIC2KTV_FONT_DIR={configured_dir}" if configured_dir else ""
+    raise VideoError(f"没有找到支持中日文的系统字体{configured_hint}")
 
 
 def _round_image(image: Image.Image, radius: int) -> Image.Image:

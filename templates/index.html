@@ -6,6 +6,9 @@
   <meta name="theme-color" content="#242424">
   <title>CloudMusic2KTV</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script>
+    window.CLOUDMUSIC2KTV_BASE_PATH = {{ cloudmusic2ktv_base_path|tojson }};
+  </script>
 </head>
 <body>
   <header class="topbar">

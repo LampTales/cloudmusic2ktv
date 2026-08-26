@@ -88,7 +88,7 @@ cloudmusic2ktv/
 
 `NeteaseClient` 和 `SongDownloadService` 不再全局共享，而是根据当前网站账号绑定的网易云 Cookie 或匿名模式为每次请求创建。歌曲素材、下载互斥状态和视频队列仍是全局共享状态。
 
-默认监听 `0.0.0.0:7860`，可用 `CLOUDMUSIC2KTV_HOST` 和 `CLOUDMUSIC2KTV_PORT` 覆盖；只允许本机访问时将 `CLOUDMUSIC2KTV_HOST` 设为 `127.0.0.1`。Flask 以 `threaded=True` 启动，但视频编码器自己的执行池只有一个 worker。局域网测试可以同时设置 `CLOUDMUSIC2KTV_TLS_CERT` 和 `CLOUDMUSIC2KTV_TLS_KEY`，让内置服务器直接使用本地 CA 证书提供 HTTPS；两个路径支持相对于项目根目录的写法。未设置时保持 HTTP。长期公网部署时也可由外层反向代理终止正式 HTTPS；此时仅在代理可信且会覆盖转发头时设置 `CLOUDMUSIC2KTV_TRUST_PROXY=1`，让应用据 `X-Forwarded-Proto` 判断 Cookie 导入是否经过 HTTPS。直接暴露应用时不要设置该变量。
+默认监听 `0.0.0.0:7860`，可用 `CLOUDMUSIC2KTV_HOST` 和 `CLOUDMUSIC2KTV_PORT` 覆盖；只允许本机访问时将 `CLOUDMUSIC2KTV_HOST` 设为 `127.0.0.1`。Flask 以 `threaded=True` 启动，但视频编码器自己的执行池只有一个 worker。局域网测试可以同时设置 `CLOUDMUSIC2KTV_TLS_CERT` 和 `CLOUDMUSIC2KTV_TLS_KEY`，让内置服务器直接使用本地 CA 证书提供 HTTPS；两个路径支持相对于项目根目录的写法。未设置时保持 HTTP。长期公网部署时也可由外层反向代理终止正式 HTTPS；此时仅在代理可信且会覆盖转发头时设置 `CLOUDMUSIC2KTV_TRUST_PROXY=1`，应用会同时信任 `X-Forwarded-Proto`、`X-Forwarded-Host` 和 `X-Forwarded-Prefix`。如果应用发布在域名子路径（例如 `/ktv`），设置 `CLOUDMUSIC2KTV_BASE_PATH=/ktv`，并让反代剥离该前缀后转发；前端 API、静态资源、artifact URL 和会话 Cookie Path 会跟随该前缀。直接暴露应用时不要设置 `CLOUDMUSIC2KTV_TRUST_PROXY`。
 
 ### API 一览
 
@@ -268,7 +268,7 @@ cloudmusic2ktv/
 - 自动匹配封面强调色；
 - 根据文本内容选择中文或日文字体。
 
-当前字体候选写死为 Windows 字体路径：微软雅黑、游ゴシック、Meiryo，最后回退 Arial。这是移植到 macOS/Linux 前必须处理的约束。
+字体候选支持 `CLOUDMUSIC2KTV_FONT_DIR`，并内置 Linux Noto CJK、macOS PingFang/Hiragino、Windows 微软雅黑/游ゴシック/Meiryo 路径；Docker 镜像安装 `fonts-noto-cjk`。如果运行环境使用其他字体，可通过该变量指定字体目录。
 
 ### 固定时间规则
 

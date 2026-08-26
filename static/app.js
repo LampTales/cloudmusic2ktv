@@ -21,6 +21,14 @@ let qrPollTimer = null;
 let qrExpireTimer = null;
 let qrFlowId = 0;
 let ydDeviceTokenPromise = null;
+const APP_BASE_PATH = String(window.CLOUDMUSIC2KTV_BASE_PATH || "").replace(/\/+$/, "");
+
+function appUrl(path) {
+  const value = String(path || "");
+  if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(value)) return value;
+  const suffix = value.startsWith("/") ? value : `/${value}`;
+  return `${APP_BASE_PATH}${suffix}` || suffix;
+}
 
 function getYdDeviceToken() {
   if (ydDeviceTokenPromise) return ydDeviceTokenPromise;
@@ -46,7 +54,7 @@ function getYdDeviceToken() {
 }
 
 async function api(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await fetch(appUrl(url), {
     headers: {"Content-Type": "application/json", ...(options.headers || {})},
     credentials: options.credentials || "same-origin",
     ...options,
@@ -1094,7 +1102,7 @@ $("#customBackground").addEventListener("change", async (event) => {
   data.append("song", selectedSong.id);
   data.append("background", event.currentTarget.files[0]);
   try {
-    const response = await fetch("/api/video/background", {method: "POST", body: data});
+    const response = await fetch(appUrl("/api/video/background"), {method: "POST", body: data});
     const result = await response.json();
     if (!response.ok || !result.ok) throw new Error(result?.error?.message || "上传背景失败");
     notify("自定义背景已保存");
