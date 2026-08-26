@@ -363,13 +363,22 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .admin-role-label { display: flex; align-items: center; gap: 9px; margin-top: 12px; color: var(--muted); font-size: 12px; }
 .admin-role-label select { width: auto; min-height: 36px; }
 .admin-list { display: grid; gap: 8px; margin-top: 12px; }
+.admin-search-results {
+  max-height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 3px;
+}
 .admin-user-row { display: flex; align-items: center; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #fafafa; }
 .admin-user-row > button { flex: 0 0 auto; }
 .admin-user-row img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; background: #eee; }
 .admin-user-copy { min-width: 0; flex: 1; display: grid; gap: 3px; }
 .admin-user-copy strong, .admin-user-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .admin-user-copy small { color: var(--muted); font-size: 10px; }
-.admin-role-badge { padding: 4px 7px; color: var(--red); background: var(--red-soft); border-radius: 999px; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.admin-role-badge { padding: 4px 8px; border: 1px solid transparent; border-radius: 999px; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.admin-role-admin { color: var(--red); background: var(--red-soft); border-color: #f3c7c7; }
+.admin-role-user { color: #333; background: #f4f4f4; border-color: #dcdcdc; }
 .admin-section-heading { display: flex; align-items: center; justify-content: space-between; }
 .admin-empty { margin: 14px 0 0; color: var(--muted); text-align: center; font-size: 12px; }
 .queue-detail-list { display: grid; gap: 10px; padding-top: 16px; }
