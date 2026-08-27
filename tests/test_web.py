@@ -65,6 +65,12 @@ def test_unknown_route_remains_404():
     assert response.status_code == 404
 
 
+@pytest.mark.parametrize("path", ["/", "/config.js", "/static/app.js"])
+def test_backend_is_api_only(path):
+    response = web_app.app.test_client().get(path)
+    assert response.status_code == 404
+
+
 def test_health_endpoint_is_public_for_container_checks():
     response = web_app.app.test_client().get("/api/healthz")
     assert response.status_code == 200

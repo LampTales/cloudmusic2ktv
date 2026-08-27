@@ -20,7 +20,7 @@ from flask import Flask, Response, jsonify, request, send_file
 ROOT = Path(__file__).resolve().parent
 frontend_app = Flask(
     __name__,
-    static_folder=str(ROOT / "static"),
+    static_folder=str(ROOT / "frontend" / "static"),
     static_url_path="/static",
 )
 
@@ -33,7 +33,7 @@ def backend_origin() -> str:
 
 @frontend_app.get("/")
 def index():
-    return send_file(ROOT / "templates" / "index.html")
+    return send_file(ROOT / "frontend" / "index.html")
 
 
 @frontend_app.get("/config.js")

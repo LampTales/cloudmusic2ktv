@@ -1,0 +1,15 @@
+services:
+  backend:
+    image: ${CLOUDMUSIC2KTV_BACKEND_IMAGE:-ghcr.io/lamptales/cloudmusic2ktv-backend:latest}
+    environment:
+      CLOUDMUSIC2KTV_HOST: 0.0.0.0
+      CLOUDMUSIC2KTV_PORT: 7860
+      CLOUDMUSIC2KTV_BASE_PATH: ${CLOUDMUSIC2KTV_BASE_PATH:-}
+      CLOUDMUSIC2KTV_TRUST_PROXY: "1"
+      CLOUDMUSIC2KTV_FONT_DIR: /usr/share/fonts/opentype/noto
+    ports:
+      - "${CLOUDMUSIC2KTV_BACKEND_BIND_ADDRESS:-127.0.0.1}:7860:7860"
+    volumes:
+      - ./docker-data/instance:/app/instance
+      - ./docker-data/outputs:/app/outputs
+    restart: unless-stopped

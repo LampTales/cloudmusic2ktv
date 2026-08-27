@@ -10,8 +10,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import quote
 
-from flask import Flask, g, jsonify, render_template, request, send_file, url_for
+from flask import Flask, g, jsonify, request, send_file
 from functools import wraps
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.exceptions import HTTPException
@@ -66,7 +67,13 @@ VIDEO_ARTIFACT = re.compile(
 )
 VIDEO_FILE = re.compile(r"^ktv_(1080p|720p)(?:_[0-9a-f]{12})?\.mp4$")
 
-app = Flask(__name__, instance_path=str(INSTANCE), instance_relative_config=True)
+app = Flask(
+    __name__,
+    instance_path=str(INSTANCE),
+    instance_relative_config=True,
+    static_folder=None,
+    template_folder=None,
+)
 app.config.update(
     MAX_CONTENT_LENGTH=32 * 1024 * 1024,
     APPLICATION_ROOT=BASE_PATH or "/",
@@ -100,24 +107,6 @@ def add_cors_headers(response: Any) -> Any:
     return response
 
 
-@app.get("/config.js")
-def frontend_config() -> Any:
-    """Expose runtime settings consumed by the independently served frontend."""
-    script_root = request.script_root.rstrip("/") or BASE_PATH
-    api_origin = os.environ.get("CLOUDMUSIC2KTV_API_ORIGIN", "").strip().rstrip("/")
-    payload = (
-        "window.CLOUDMUSIC2KTV_BASE_PATH = "
-        + json.dumps(script_root, ensure_ascii=True)
-        + ";\n"
-        + "window.CLOUDMUSIC2KTV_API_ORIGIN = "
-        + json.dumps(api_origin, ensure_ascii=True)
-        + ";\n"
-    )
-    response = app.response_class(payload, mimetype="application/javascript")
-    response.headers["Cache-Control"] = "no-store"
-    return response
-
-
 if os.environ.get("CLOUDMUSIC2KTV_TRUST_PROXY") == "1":
     # Only enable this when the app is behind a controlled reverse proxy.
     app.wsgi_app = ProxyFix(
@@ -138,13 +127,6 @@ active_downloads: set[int] = set()
 cookie_import_rate_lock = threading.Lock()
 cookie_import_last_attempt: dict[str, float] = {}
 auth_sessions.cleanup_expired()
-
-
-@app.context_processor
-def inject_runtime_url_config() -> dict[str, str]:
-    """Expose the effective script root to the subpath-aware frontend."""
-    script_root = request.script_root.rstrip("/") or BASE_PATH
-    return {"cloudmusic2ktv_base_path": script_root}
 
 
 def authorized_identity(*, admin: bool = False) -> tuple[dict[str, Any] | None, Any | None]:
@@ -188,11 +170,6 @@ def admin_required(view):
         return view(*args, **kwargs)
 
     return wrapped
-
-
-@app.get("/")
-def index() -> str:
-    return render_template("index.html")
 
 
 @app.get("/api/healthz")
@@ -676,9 +653,7 @@ def video_preview() -> Any:
     fingerprint = video_options_fingerprint(options)
     destination = project.directory / f"video_preview_{fingerprint}.png"
     result = render_preview(project, options, destination)
-    result["url"] = url_for(
-        "video_artifact", song_id=song_id, filename=destination.name, version=destination.stat().st_mtime_ns
-    )
+    result["url"] = artifact_url(song_id, destination.name, destination.stat().st_mtime_ns)
     return jsonify({"ok": True, "preview": result})
 
 
@@ -922,12 +897,7 @@ def job_with_artifact_url(value: dict[str, Any]) -> dict[str, Any]:
     result = dict(result)
     path = Path(result["path"])
     if path.exists():
-        result["url"] = url_for(
-            "video_artifact",
-            song_id=job["song_id"],
-            filename=path.name,
-            version=path.stat().st_mtime_ns,
-        )
+        result["url"] = artifact_url(job["song_id"], path.name, path.stat().st_mtime_ns)
     job["result"] = result
     return job
 
@@ -949,16 +919,17 @@ def local_video_files(song_id: int) -> list[dict[str, Any]]:
                 "resolution": match.group(1),
                 "size": stat.st_size,
                 "updated_at": int(stat.st_mtime),
-                "url": url_for(
-                    "video_artifact",
-                    song_id=song_id,
-                    filename=path.name,
-                    version=stat.st_mtime_ns,
-                ),
+                "url": artifact_url(song_id, path.name, stat.st_mtime_ns),
             }
         )
     videos.sort(key=lambda item: (item["updated_at"], item["filename"]), reverse=True)
     return videos
+
+
+def artifact_url(song_id: int, filename: str, version: int | None = None) -> str:
+    """Build a proxy-friendly relative URL for a generated artifact."""
+    path = f"{BASE_PATH}/api/video/artifact/{song_id}/{quote(filename, safe='')}"
+    return f"{path}?version={version}" if version is not None else path
 
 
 def local_artifact_path(song_id: int, filename: str) -> Path | None:
