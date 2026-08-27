@@ -14,6 +14,7 @@ cloudmusic2ktv/
 ├─ .dockerignore              Docker 构建上下文排除规则
 ├─ .github/workflows/docker.yml  CI、测试和镜像构建
 ├─ app.py                     Flask 应用入口
+├─ frontend_server.py         独立前端开发服务器
 ├─ cloudmusic2ktv/             业务代码
 ├─ static/                     前端静态资源
 ├─ templates/                  HTML 模板
@@ -184,6 +185,31 @@ docker compose down
 ## 基本使用
 
 打开网页后登录网易云音乐，选择歌曲并下载所需素材，等待视频生成完成后播放。投屏时让播放设备和运行服务的主机处于可互相访问的网络中；公网部署则通过 HTTPS 域名访问。
+
+## 前后端分离开发
+
+`frontend_server.py` 可以独立提供网页、CSS 和 JavaScript，并可在开发时代理 `/api/*`；`app.py` 负责 API、网易云访问、素材和视频生成。推荐使用代理模式，让浏览器始终只访问前端端口：
+
+```powershell
+# 终端 1：后端 API
+$env:CLOUDMUSIC2KTV_HOST = "127.0.0.1"
+$env:CLOUDMUSIC2KTV_PORT = "17860"
+python app.py
+
+# 终端 2：前端
+$env:CLOUDMUSIC2KTV_BACKEND_ORIGIN = "http://127.0.0.1:17860"
+$env:CLOUDMUSIC2KTV_FRONTEND_PORT = "18080"
+python frontend_server.py
+```
+
+然后打开 `http://127.0.0.1:18080/`。此时浏览器请求 `/api/...` 会由前端开发服务转发到后端，
+所以视频链接也保持在 `18080` 这个可访问的前端地址上，不需要本地启用 CORS。
+
+如果需要调试真正的跨端口请求，也可以设置 `CLOUDMUSIC2KTV_API_ORIGIN`，并把前端地址加入后端的
+`CLOUDMUSIC2KTV_CORS_ORIGINS`。正式部署时建议由公网服务器提供同源静态前端，并将 `/api/`
+（包括视频 artifact）反向代理到 Mac 后端，此时不需要启用 CORS。
+
+视频任务状态保存在后端 `instance/video_jobs.json`。后端正常重启后，之前处于排队或运行状态的任务会重新排队；视频渲染仍然保持单 worker。
 
 ### 目前问题
 当前版本的二维码登录暂时不可用，请使用验证码或cookie登录。投屏选项中播放、生成url到app投屏、直接下载都可以使用，直接使用浏览器投屏暂时不可用。

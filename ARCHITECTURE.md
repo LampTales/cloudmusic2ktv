@@ -64,6 +64,7 @@ cloudmusic2ktv/
 ├─ static/
 │  ├─ app.js                     WebUI 交互与前端状态
 │  └─ app.css                    页面样式
+├─ frontend_server.py            独立静态前端开发服务器
 ├─ tests/
 │  ├─ test_crypto.py             weapi 加密结构
 │  ├─ test_lyrics.py             LRC 与多语言时间轴
@@ -304,7 +305,7 @@ cloudmusic2ktv/
 
 ### VideoJobManager
 
-`VideoJobManager` 使用 `ThreadPoolExecutor(max_workers=1)`，因此所有视频任务串行执行。任务对象只保存在当前 Python 进程内：
+`VideoJobManager` 使用 `ThreadPoolExecutor(max_workers=1)`，因此所有视频任务串行执行。任务记录会原子写入 `instance/video_jobs.json`，后端启动时会把上次重启前处于 `queued/running` 状态的任务恢复为排队状态并重新提交；渲染仍然只在当前单进程内执行：
 
 ```json
 {
@@ -322,9 +323,14 @@ cloudmusic2ktv/
 
 任务不保存提交者身份；`POST /api/video/render` 在提交时检查当前浏览器的名单成员身份。相同歌曲和完全相同选项的活动任务会去重。视频队列和 artifact 接口也要求名单成员会话。
 
-后端重启会丢失全部任务状态，并终止正在运行的 FFmpeg/渲染过程。不要在视频生成期间重启服务。
+后端重启不会丢失任务记录，但会终止正在运行的 FFmpeg/渲染过程；这些任务会在启动后重新渲染。已经完成的视频文件不会受影响。不要在视频生成期间频繁重启服务。
 
 ### static/app.js
+
+前端资源可以由 `frontend_server.py` 或 Nginx 独立提供。页面通过相对路径加载
+`static/app.css`、`static/app.js` 和 `config.js`；`config.js` 注入可选的
+`CLOUDMUSIC2KTV_BASE_PATH`、`CLOUDMUSIC2KTV_API_ORIGIN`，使本地分端口验证和
+反向代理部署共用同一套前端代码。生产环境建议保持 API 同源并关闭 CORS。
 
 前端没有框架，核心状态为：
 
@@ -400,7 +406,7 @@ node --check static\app.js
 1. 网易云内部接口可能变化，错误诊断优先查看终端日志、`lyrics_raw.json` 和 `metadata.json`。
 2. 歌词扫色以逐行时间轴匀速估算，不是真正逐字同步；原始 `klyric` 已保留，但尚未解析成逐字模型。
 3. 视频渲染为 CPU 密集型 Python 逐帧流程，1080p 完整歌曲较慢。
-4. 任务仅在内存中；页面刷新可恢复全局视图，但后端重启无法恢复任务。
+4. 任务队列仍是单进程、单 worker；任务记录已持久化并支持后端重启后恢复排队，但没有取消、暂停或多实例协调。
 5. 任务执行池只有一个 worker，没有取消、暂停或持久化恢复。
 6. 字体搜索只支持当前 Windows 路径。
 7. 同歌多版本/不同音频扩展名缺少 manifest，可能选到残留旧文件。

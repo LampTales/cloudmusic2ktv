@@ -71,6 +71,20 @@ def test_health_endpoint_is_public_for_container_checks():
     assert response.get_json() == {"ok": True, "status": "healthy"}
 
 
+def test_configured_local_frontend_origin_receives_credentialed_cors_headers(monkeypatch):
+    monkeypatch.setenv("CLOUDMUSIC2KTV_CORS_ORIGINS", "http://127.0.0.1:8080")
+    response = web_app.app.test_client().options(
+        "/api/status",
+        headers={
+            "Origin": "http://127.0.0.1:8080",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:8080"
+    assert response.headers["Access-Control-Allow-Credentials"] == "true"
+
+
 def test_base_path_normalization():
     assert web_app.normalize_base_path("") == ""
     assert web_app.normalize_base_path("ktv/") == "/ktv"

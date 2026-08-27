@@ -72,6 +72,52 @@ app.config.update(
     APPLICATION_ROOT=BASE_PATH or "/",
 )
 app.json.ensure_ascii = False
+
+
+def configured_cors_origins() -> set[str]:
+    """Return explicitly allowed frontend origins for local split testing.
+
+    Production deployments should normally leave this empty and use a
+    same-origin reverse proxy.  A comma-separated allowlist is useful when
+    the standalone frontend runs on a different local port.
+    """
+    value = os.environ.get("CLOUDMUSIC2KTV_CORS_ORIGINS", "")
+    return {item.strip().rstrip("/") for item in value.split(",") if item.strip()}
+
+
+@app.after_request
+def add_cors_headers(response: Any) -> Any:
+    origin = request.headers.get("Origin", "").rstrip("/")
+    if origin and origin in configured_cors_origins():
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Range"
+        response.headers["Access-Control-Allow-Methods"] = "GET, HEAD, POST, DELETE, OPTIONS"
+        response.headers["Access-Control-Expose-Headers"] = (
+            "Accept-Ranges, Content-Length, Content-Range, Content-Disposition"
+        )
+        response.headers.add("Vary", "Origin")
+    return response
+
+
+@app.get("/config.js")
+def frontend_config() -> Any:
+    """Expose runtime settings consumed by the independently served frontend."""
+    script_root = request.script_root.rstrip("/") or BASE_PATH
+    api_origin = os.environ.get("CLOUDMUSIC2KTV_API_ORIGIN", "").strip().rstrip("/")
+    payload = (
+        "window.CLOUDMUSIC2KTV_BASE_PATH = "
+        + json.dumps(script_root, ensure_ascii=True)
+        + ";\n"
+        + "window.CLOUDMUSIC2KTV_API_ORIGIN = "
+        + json.dumps(api_origin, ensure_ascii=True)
+        + ";\n"
+    )
+    response = app.response_class(payload, mimetype="application/javascript")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 if os.environ.get("CLOUDMUSIC2KTV_TRUST_PROXY") == "1":
     # Only enable this when the app is behind a controlled reverse proxy.
     app.wsgi_app = ProxyFix(
@@ -86,7 +132,7 @@ auth_sessions = FileSessionStore(INSTANCE / "sessions", ttl_seconds=SESSION_TTL_
 allowlist = AllowlistStore(INSTANCE / "allowlist.json")
 website_accounts = WebsiteAccountStore(INSTANCE / "accounts.json")
 netease_bindings = NeteaseBindingStore(INSTANCE / "netease_bindings.json")
-video_jobs = VideoJobManager(OUTPUTS)
+video_jobs = VideoJobManager(OUTPUTS, state_path=INSTANCE / "video_jobs.json")
 download_state_lock = threading.Lock()
 active_downloads: set[int] = set()
 cookie_import_rate_lock = threading.Lock()
