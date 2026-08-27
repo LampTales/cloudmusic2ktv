@@ -29,6 +29,89 @@ ghcr.io/lamptales/cloudmusic2ktv-backend:latest
 
 前端是用户唯一需要访问的入口。后端保存 `instance/`、`outputs/`，前端机器默认不保存视频文件。
 
+## 配置参数
+
+参数按运行方式分为 Compose 部署参数、后端运行参数和开发前端参数。同名参数在不同终端中需要分别设置；前端节点不会自动读取后端节点的 `.env`。
+
+设置格式：
+
+```dotenv
+# Docker Compose 的 .env
+CLOUDMUSIC2KTV_BACKEND_PORT=7860
+```
+
+```bash
+# Linux / macOS 源码运行
+export CLOUDMUSIC2KTV_PORT=7860
+```
+
+```powershell
+# Windows PowerShell 源码运行
+$env:CLOUDMUSIC2KTV_PORT = "7860"
+```
+
+布尔开关只有值为 `1` 时才启用；使用 `0` 或不设置表示关闭。
+
+### 正式分机部署：后端 `.env`
+
+这些参数由 `deploy/compose.backend.yml` 读取：
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `CLOUDMUSIC2KTV_BACKEND_IMAGE` | `ghcr.io/lamptales/cloudmusic2ktv-backend:latest` | 后端镜像及标签，可固定为版本或 `sha-*` 标签 |
+| `CLOUDMUSIC2KTV_BACKEND_BIND_ADDRESS` | `127.0.0.1` | 后端发布到宿主机的监听地址；分机部署应填私有/VPN IP，不应填公网 IP |
+| `CLOUDMUSIC2KTV_BACKEND_PORT` | `7860` | 后端发布到宿主机的端口，前端节点通过这个端口连接 |
+| `CLOUDMUSIC2KTV_BASE_PATH` | 空 | 公网页面的路径前缀；根路径部署留空，部署到 `/ktv/` 时填 `/ktv` |
+| `CLOUDMUSIC2KTV_TRUST_PROXY` | `1` | 信任一层受控代理传来的 `X-Forwarded-*`；只有后端仅允许受控前端代理访问时才能启用 |
+| `CLOUDMUSIC2KTV_ALLOW_INSECURE_COOKIE_IMPORT` | `0` | 允许通过非 HTTPS 导入网易云 Cookie；仅可信测试网络临时设为 `1` |
+| `CLOUDMUSIC2KTV_CORS_ORIGINS` | 空 | 允许浏览器跨域直连后端的 Origin，多个值用逗号分隔；同源前端代理模式应留空 |
+| `CLOUDMUSIC2KTV_SESSION_DAYS` | `90` | 网站登录会话有效天数 |
+
+后端容器内部固定监听 `0.0.0.0:7860`，`CLOUDMUSIC2KTV_BACKEND_PORT` 只调整宿主机一侧的发布端口。例如设置为 `17860` 后，端口映射为 `17860:7860`，前端应使用 `http://<BACKEND_PRIVATE_IP>:17860`。同时调整防火墙规则和健康检查地址。
+
+### 正式分机部署：前端 `.env`
+
+这些参数由 `deploy/compose.frontend.yml` 读取：
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `CLOUDMUSIC2KTV_FRONTEND_IMAGE` | `ghcr.io/lamptales/cloudmusic2ktv-frontend:latest` | 前端镜像及标签 |
+| `CLOUDMUSIC2KTV_FRONTEND_BIND_ADDRESS` | `127.0.0.1` | 前端容器发布到宿主机的地址；由同机公网 Nginx 代理时保留 `127.0.0.1` |
+| `CLOUDMUSIC2KTV_FRONTEND_PORT` | `8080` | 前端容器发布到宿主机的端口 |
+| `CLOUDMUSIC2KTV_BACKEND_UPSTREAM` | 必填 | 前端 Nginx 访问后端的完整源地址，例如 `http://10.0.0.2:17860` |
+
+仓库根目录的 `docker-compose.yml` 用于同机调试。它还使用 `CLOUDMUSIC2KTV_BIND_ADDRESS` 控制前端宿主机监听地址；后端只在 Compose 内部网络监听，不发布后端宿主机端口。
+
+### 后端直接从源码运行
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `CLOUDMUSIC2KTV_HOST` | `0.0.0.0` | 后端进程监听地址；仅本机访问时建议设为 `127.0.0.1` |
+| `CLOUDMUSIC2KTV_PORT` | `7860` | 后端进程实际监听端口，例如端口冲突时可改为 `17860` |
+| `CLOUDMUSIC2KTV_BASE_PATH` | 空 | 外部反向代理使用的路径前缀，也决定网站会话 Cookie 的 Path |
+| `CLOUDMUSIC2KTV_TRUST_PROXY` | 关闭 | 是否信任一层代理提供的客户端 IP、协议、Host 和路径前缀 |
+| `CLOUDMUSIC2KTV_ALLOW_INSECURE_COOKIE_IMPORT` | 关闭 | 是否允许非 HTTPS Cookie 导入，仅用于可信调试网络 |
+| `CLOUDMUSIC2KTV_CORS_ORIGINS` | 空 | 浏览器可跨域访问后端的 Origin 白名单，使用逗号分隔 |
+| `CLOUDMUSIC2KTV_SESSION_DAYS` | `90` | 网站登录会话有效天数 |
+| `CLOUDMUSIC2KTV_TLS_CERT` | 空 | 后端直接提供 HTTPS 时使用的证书文件路径，必须与私钥同时设置 |
+| `CLOUDMUSIC2KTV_TLS_KEY` | 空 | 后端直接提供 HTTPS 时使用的私钥文件路径，必须与证书同时设置 |
+| `CLOUDMUSIC2KTV_FFMPEG` | 自动查找 | FFmpeg 可执行文件的明确路径 |
+| `CLOUDMUSIC2KTV_FONT_DIR` | 自动查找 | 中日韩字体目录；找不到合适字体时设置 |
+
+正式部署通常由公网代理终止 HTTPS，因此无需给后端设置 `CLOUDMUSIC2KTV_TLS_CERT` 和 `CLOUDMUSIC2KTV_TLS_KEY`。
+
+### 开发前端直接从源码运行
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `CLOUDMUSIC2KTV_BACKEND_ORIGIN` | `http://127.0.0.1:7860` | 开发代理访问的后端源地址 |
+| `CLOUDMUSIC2KTV_FRONTEND_HOST` | `127.0.0.1` | 开发前端监听地址；局域网测试可设为 `0.0.0.0` |
+| `CLOUDMUSIC2KTV_FRONTEND_PORT` | `8080` | 开发前端监听端口 |
+| `CLOUDMUSIC2KTV_FRONTEND_BASE_PATH` | 空 | 生成给浏览器的外部页面路径前缀 |
+| `CLOUDMUSIC2KTV_API_ORIGIN` | 空 | 浏览器直连的 API Origin；推荐留空，让 `/api/*` 经过同源开发代理 |
+
+如果系统配置了 HTTP(S) 出站代理，而后端使用局域网或 VPN 地址，还应在操作系统的 `NO_PROXY` 中加入后端 IP；`NO_PROXY` 是通用系统变量，不是项目专用参数。
+
 ## 正式部署：前后端分机，直接拉取镜像
 
 这是推荐的正式部署方式。以下将两台机器称为：
@@ -39,8 +122,8 @@ ghcr.io/lamptales/cloudmusic2ktv-backend:latest
 开始前确认：
 
 1. 两台机器已通过 ZeroTier 或其他私有网络互通；
-2. 前端节点可以访问 `http://<BACKEND_PRIVATE_IP>:7860/api/healthz`；
-3. 后端防火墙只允许前端节点的私有 IP 访问 7860；
+2. 前端节点可以访问 `http://<BACKEND_PRIVATE_IP>:<BACKEND_PORT>/api/healthz`；
+3. 后端防火墙只允许前端节点的私有 IP 访问所选后端端口；
 4. 公网域名和 HTTPS 证书由前端节点管理。
 
 ### 1. 部署后端节点
@@ -65,6 +148,7 @@ curl -fsSLo .env https://raw.githubusercontent.com/LampTales/cloudmusic2ktv/main
 ```dotenv
 CLOUDMUSIC2KTV_BACKEND_IMAGE=ghcr.io/lamptales/cloudmusic2ktv-backend:latest
 CLOUDMUSIC2KTV_BACKEND_BIND_ADDRESS=<BACKEND_PRIVATE_IP>
+CLOUDMUSIC2KTV_BACKEND_PORT=7860
 CLOUDMUSIC2KTV_BASE_PATH=/ktv
 ```
 
@@ -88,7 +172,7 @@ docker compose logs -f backend
 在后端节点上验证：
 
 ```bash
-curl http://<BACKEND_PRIVATE_IP>:7860/api/healthz
+curl http://<BACKEND_PRIVATE_IP>:<BACKEND_PORT>/api/healthz
 ```
 
 ### 2. 部署前端节点
@@ -108,7 +192,7 @@ curl -fsSLo .env https://raw.githubusercontent.com/LampTales/cloudmusic2ktv/main
 CLOUDMUSIC2KTV_FRONTEND_IMAGE=ghcr.io/lamptales/cloudmusic2ktv-frontend:latest
 CLOUDMUSIC2KTV_FRONTEND_BIND_ADDRESS=127.0.0.1
 CLOUDMUSIC2KTV_FRONTEND_PORT=8080
-CLOUDMUSIC2KTV_BACKEND_UPSTREAM=http://<BACKEND_PRIVATE_IP>:7860
+CLOUDMUSIC2KTV_BACKEND_UPSTREAM=http://<BACKEND_PRIVATE_IP>:<BACKEND_PORT>
 ```
 
 启动并验证前端到后端的代理：

@@ -16,6 +16,7 @@ on:
       - ".dockerignore"
       - "docker-compose.yml"
       - ".env.example"
+      - "deploy/**"
       - ".github/workflows/**"
   pull_request:
     paths:
@@ -28,6 +29,7 @@ on:
       - ".dockerignore"
       - "docker-compose.yml"
       - ".env.example"
+      - "deploy/**"
       - ".github/workflows/**"
 
 permissions:
@@ -61,6 +63,12 @@ jobs:
 
       - name: Check JavaScript syntax
         run: node --check frontend/static/app.js
+
+      - name: Validate Docker Compose configuration
+        run: |
+          docker compose --env-file .env.example -f docker-compose.yml config
+          docker compose --env-file deploy/backend.env.example -f deploy/compose.backend.yml config
+          docker compose --env-file deploy/frontend.env.example -f deploy/compose.frontend.yml config
 
   docker:
     name: Build ${{ matrix.component }} image
