@@ -1,0 +1,8 @@
+services:
+  frontend:
+    image: ${CLOUDMUSIC2KTV_FRONTEND_IMAGE:-ghcr.io/lamptales/cloudmusic2ktv-frontend:latest}
+    environment:
+      BACKEND_UPSTREAM: ${CLOUDMUSIC2KTV_BACKEND_UPSTREAM:?Set the private backend URL}
+    ports:
+      - "${CLOUDMUSIC2KTV_FRONTEND_BIND_ADDRESS:-127.0.0.1}:${CLOUDMUSIC2KTV_FRONTEND_PORT:-8080}:80"
+    restart: unless-stopped

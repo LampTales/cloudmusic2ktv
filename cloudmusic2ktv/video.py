@@ -775,11 +775,21 @@ def render_video(
 
 
 class VideoJobManager:
-    def __init__(self, output_root: Path):
-        self.output_root = output_root
+    """Single-worker video queue with an atomic on-disk recovery journal.
+
+    The queue is intentionally still single-process.  Persisting the small
+    job records means a normal backend restart can resume queued/running jobs,
+    while keeping the rendering implementation and deployment lightweight.
+    """
+
+    def __init__(self, output_root: Path, state_path: Path | None = None):
+        self.output_root = Path(output_root)
+        self.state_path = Path(state_path) if state_path is not None else self.output_root / ".video_jobs.json"
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="video-render")
         self.jobs: dict[str, dict[str, Any]] = {}
         self.lock = threading.Lock()
+        self._load_state()
+        self._resume_active_jobs()
 
     def start(
         self, song_id: int, options: VideoOptions, song: dict[str, Any] | None = None
@@ -805,6 +815,7 @@ class VideoJobManager:
                 "resolution": options.resolution,
                 "task_key": task_key,
                 "fingerprint": fingerprint,
+                "options": options.to_dict(),
                 "status": "queued",
                 "progress": 0,
                 "message": "等待渲染",
@@ -815,6 +826,7 @@ class VideoJobManager:
                 "finished_at": None,
             }
             self.jobs[job_id] = job
+            self._save_state_locked()
         self.executor.submit(self._run, job_id, song_id, options)
         with self.lock:
             result = self._public_job(self.jobs[job_id])
@@ -892,7 +904,11 @@ class VideoJobManager:
 
     def _update(self, job_id: str, **values: Any) -> None:
         with self.lock:
-            self.jobs[job_id].update(values)
+            job = self.jobs.get(job_id)
+            if job is None:
+                return
+            job.update(values)
+            self._save_state_locked()
 
     def _position_locked(self, job_id: str) -> int:
         position = 0
@@ -908,7 +924,61 @@ class VideoJobManager:
     def _public_job(job: dict[str, Any] | None) -> dict[str, Any] | None:
         if job is None:
             return None
-        return {key: value for key, value in job.items() if key != "task_key"}
+        return {key: value for key, value in job.items() if key not in {"task_key", "options"}}
+
+    def _load_state(self) -> None:
+        try:
+            value = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return
+        records = value.get("jobs") if isinstance(value, dict) else None
+        if not isinstance(records, dict):
+            return
+        for job_id, raw in records.items():
+            if not isinstance(raw, dict) or not isinstance(job_id, str):
+                continue
+            if not isinstance(raw.get("song_id"), int) or not isinstance(raw.get("options"), dict):
+                continue
+            job = dict(raw)
+            job["id"] = job_id
+            if job.get("status") in {"queued", "running"}:
+                job["status"] = "queued"
+                job["progress"] = min(99, max(0, int(job.get("progress") or 0)))
+                job["message"] = "服务重启后恢复排队"
+                job["started_at"] = None
+            self.jobs[job_id] = job
+
+    def _resume_active_jobs(self) -> None:
+        for job_id, job in list(self.jobs.items()):
+            if job.get("status") not in {"queued", "running"}:
+                continue
+            try:
+                options = VideoOptions.from_mapping(job.get("options"))
+            except VideoError as exc:
+                self._update(
+                    job_id,
+                    status="error",
+                    message="恢复任务失败",
+                    error=str(exc),
+                    finished_at=int(time.time()),
+                )
+                continue
+            self.executor.submit(self._run, job_id, int(job["song_id"]), options)
+
+    def _save_state_locked(self) -> None:
+        value = {"version": 1, "jobs": self.jobs}
+        temporary = self.state_path.with_suffix(self.state_path.suffix + ".part")
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(
+                json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            temporary.replace(self.state_path)
+        except (OSError, TypeError, ValueError):
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def video_options_fingerprint(options: VideoOptions) -> str:

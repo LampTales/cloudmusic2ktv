@@ -21,13 +21,31 @@ let qrPollTimer = null;
 let qrExpireTimer = null;
 let qrFlowId = 0;
 let ydDeviceTokenPromise = null;
-const APP_BASE_PATH = String(window.CLOUDMUSIC2KTV_BASE_PATH || "").replace(/\/+$/, "");
+const API_ORIGIN = String(window.CLOUDMUSIC2KTV_API_ORIGIN || "").replace(/\/+$/, "");
+const APP_BASE_PATH = String(
+  window.CLOUDMUSIC2KTV_BASE_PATH || inferBasePath()
+).replace(/\/+$/, "");
+
+function inferBasePath() {
+  // A static frontend can be mounted below a reverse-proxy prefix without
+  // server-side template rendering.  The normal deployment URL ends in `/`,
+  // so its parent path is a safe default; an explicit config.js value wins.
+  const pathname = String(window.location.pathname || "/");
+  if (pathname.endsWith("/")) return pathname.slice(0, -1);
+  const slash = pathname.lastIndexOf("/");
+  return slash > 0 ? pathname.slice(0, slash) : "";
+}
 
 function appUrl(path) {
   const value = String(path || "");
   if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(value)) return value;
   const suffix = value.startsWith("/") ? value : `/${value}`;
-  return `${APP_BASE_PATH}${suffix}` || suffix;
+  const resolvedPath = `${APP_BASE_PATH}${suffix}` || suffix;
+  return API_ORIGIN ? `${API_ORIGIN}${resolvedPath}` : resolvedPath;
+}
+
+function resolveBackendUrl(value) {
+  return appUrl(String(value || ""));
 }
 
 function getYdDeviceToken() {
@@ -56,7 +74,7 @@ function getYdDeviceToken() {
 async function api(url, options = {}) {
   const response = await fetch(appUrl(url), {
     headers: {"Content-Type": "application/json", ...(options.headers || {})},
-    credentials: options.credentials || "same-origin",
+    credentials: options.credentials || "include",
     ...options,
   });
   let data;
@@ -239,7 +257,7 @@ function updateCastDirectLink() {
     updateBrowserCastHelp();
     return;
   }
-  const url = new URL(video.url, window.location.href).href;
+  const url = resolveBackendUrl(video.url);
   link.href = url;
   if (media.src !== url) {
     media.src = url;
@@ -282,7 +300,7 @@ async function tryBrowserCast() {
   const selectedVideo = selectedCastVideo();
   if (!selectedSong || !selectedVideo) return notify("这首歌还没有可投屏的本地视频", true);
   const media = $("#castMediaElement");
-  const url = new URL(selectedVideo.url, window.location.href).href;
+  const url = resolveBackendUrl(selectedVideo.url);
   if (media.src !== url) {
     media.src = url;
     media.load();
@@ -353,7 +371,7 @@ async function copyText(value) {
 async function openCastApp() {
   const video = selectedCastVideo();
   if (!selectedSong || !video) return notify("这首歌还没有可投屏的本地视频", true);
-  const url = new URL(video.url, window.location.href).href;
+  const url = resolveBackendUrl(video.url);
   const shareData = {
     title: `${selectedSong.name} — ${selectedSong.artist}`,
     text: "CloudMusic2KTV 视频",
@@ -381,7 +399,7 @@ async function openCastApp() {
 function downloadCastVideo() {
   const video = selectedCastVideo();
   if (!selectedSong || !video) return notify("这首歌还没有可下载的本地视频", true);
-  const url = new URL(video.url, window.location.href);
+  const url = new URL(resolveBackendUrl(video.url));
   url.searchParams.set("download", "1");
   const link = document.createElement("a");
   link.href = url.href;
@@ -1074,7 +1092,7 @@ async function refreshVideoPreview(silent = false) {
     });
     if (requestNumber !== previewRequest) return;
     const image = $("#videoPreviewImage");
-    image.src = `${data.preview.url}&client=${Date.now()}`;
+    image.src = `${resolveBackendUrl(data.preview.url)}&client=${Date.now()}`;
     image.style.display = "block";
     $("#previewPlaceholder").classList.add("hidden");
     const preRoll = data.preview.pre_roll_ms ? ` · 含 ${data.preview.pre_roll_ms / 1000} 秒开场预卷` : "";
@@ -1107,7 +1125,11 @@ $("#customBackground").addEventListener("change", async (event) => {
   data.append("song", selectedSong.id);
   data.append("background", event.currentTarget.files[0]);
   try {
-    const response = await fetch(appUrl("/api/video/background"), {method: "POST", body: data});
+    const response = await fetch(appUrl("/api/video/background"), {
+      method: "POST",
+      body: data,
+      credentials: "include",
+    });
     const result = await response.json();
     if (!response.ok || !result.ok) throw new Error(result?.error?.message || "上传背景失败");
     notify("自定义背景已保存");
@@ -1219,7 +1241,7 @@ function showQueue(queue) {
   recent.append(label);
   if (latest.status === "done" && latest.result?.url) {
     const link = document.createElement("a");
-    link.href = latest.result.url;
+    link.href = resolveBackendUrl(latest.result.url);
     link.target = "_blank";
     link.textContent = "打开视频";
     recent.append(link);

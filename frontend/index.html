@@ -5,10 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#242424">
   <title>CloudMusic2KTV</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
-  <script>
-    window.CLOUDMUSIC2KTV_BASE_PATH = {{ cloudmusic2ktv_base_path|tojson }};
-  </script>
+  <link rel="stylesheet" href="static/app.css">
+  <script src="config.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -410,6 +408,6 @@
   </div>
 
   <div id="toast" role="status" aria-live="polite"></div>
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="static/app.js"></script>
 </body>
 </html>

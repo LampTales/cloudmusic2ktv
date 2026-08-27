@@ -1,0 +1,46 @@
+map $http_x_forwarded_proto $cloudmusic2ktv_forwarded_proto {
+    default $http_x_forwarded_proto;
+    "" $scheme;
+}
+
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+
+    client_max_body_size 32m;
+
+    location = /healthz {
+        access_log off;
+        default_type application/json;
+        return 200 '{"ok":true,"status":"healthy"}';
+    }
+
+    location /api/ {
+        proxy_pass ${BACKEND_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $cloudmusic2ktv_forwarded_proto;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Prefix $http_x_forwarded_prefix;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location = /config.js {
+        add_header Cache-Control "no-store";
+    }
+
+    location /static/ {
+        expires 1h;
+        add_header Cache-Control "public, max-age=3600";
+    }
+}

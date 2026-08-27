@@ -1,4 +1,4 @@
-name: Test and build Docker image
+name: Test and build frontend/backend images
 
 on:
   push:
@@ -9,27 +9,27 @@ on:
     paths:
       - "**.py"
       - "cloudmusic2ktv/**"
-      - "static/**"
-      - "templates/**"
+      - "frontend/**"
       - "tests/**"
       - "requirements*.txt"
-      - "Dockerfile"
+      - "Dockerfile.*"
       - ".dockerignore"
       - "docker-compose.yml"
       - ".env.example"
+      - "deploy/**"
       - ".github/workflows/**"
   pull_request:
     paths:
       - "**.py"
       - "cloudmusic2ktv/**"
-      - "static/**"
-      - "templates/**"
+      - "frontend/**"
       - "tests/**"
       - "requirements*.txt"
-      - "Dockerfile"
+      - "Dockerfile.*"
       - ".dockerignore"
       - "docker-compose.yml"
       - ".env.example"
+      - "deploy/**"
       - ".github/workflows/**"
 
 permissions:
@@ -62,12 +62,26 @@ jobs:
         run: python -m pytest -q
 
       - name: Check JavaScript syntax
-        run: node --check static/app.js
+        run: node --check frontend/static/app.js
+
+      - name: Validate Docker Compose configuration
+        run: |
+          docker compose --env-file .env.example -f docker-compose.yml config
+          docker compose --env-file deploy/backend.env.example -f deploy/compose.backend.yml config
+          docker compose --env-file deploy/frontend.env.example -f deploy/compose.frontend.yml config
 
   docker:
-    name: Build Docker image
+    name: Build ${{ matrix.component }} image
     needs: test
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: backend
+            dockerfile: Dockerfile.backend
+          - component: frontend
+            dockerfile: Dockerfile.frontend
 
     steps:
       - name: Checkout
@@ -91,22 +105,22 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository }}-${{ matrix.component }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha
             type=ref,event=tag
 
-      - name: Build Docker image
+      - name: Build image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
+          file: ./${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
           provenance: true
           sbom: true

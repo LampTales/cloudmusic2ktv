@@ -1,23 +1,32 @@
 services:
-  cloudmusic2ktv:
+  backend:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: ${CLOUDMUSIC2KTV_IMAGE:-cloudmusic2ktv:local}
-    ports:
-      # LAN test: open http://<host-ip>:7860/
-      # Behind a reverse proxy, bind this to 127.0.0.1:7860:7860 instead.
-      - "${CLOUDMUSIC2KTV_BIND_ADDRESS:-0.0.0.0}:7860:7860"
+      dockerfile: Dockerfile.backend
+    image: ${CLOUDMUSIC2KTV_BACKEND_IMAGE:-cloudmusic2ktv-backend:local}
     environment:
       CLOUDMUSIC2KTV_HOST: 0.0.0.0
       CLOUDMUSIC2KTV_PORT: 7860
-      # Leave empty for a LAN root deployment. For a proxy location such as
-      # https://example.com/ktv/, set CLOUDMUSIC2KTV_BASE_PATH=/ktv and
-      # CLOUDMUSIC2KTV_TRUST_PROXY=1.
-      CLOUDMUSIC2KTV_BASE_PATH: ${CLOUDMUSIC2KTV_BASE_PATH:-}
-      CLOUDMUSIC2KTV_TRUST_PROXY: ${CLOUDMUSIC2KTV_TRUST_PROXY:-0}
+      CLOUDMUSIC2KTV_TRUST_PROXY: "1"
+      CLOUDMUSIC2KTV_ALLOW_INSECURE_COOKIE_IMPORT: "1"
       CLOUDMUSIC2KTV_FONT_DIR: /usr/share/fonts/opentype/noto
     volumes:
       - ./docker-data/instance:/app/instance
       - ./docker-data/outputs:/app/outputs
+    expose:
+      - "7860"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    image: ${CLOUDMUSIC2KTV_FRONTEND_IMAGE:-cloudmusic2ktv-frontend:local}
+    environment:
+      BACKEND_UPSTREAM: http://backend:7860
+    ports:
+      - "${CLOUDMUSIC2KTV_BIND_ADDRESS:-127.0.0.1}:${CLOUDMUSIC2KTV_FRONTEND_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
     restart: unless-stopped

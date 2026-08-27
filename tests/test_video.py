@@ -236,3 +236,57 @@ def test_queue_deduplicates_active_options_and_reports_waiting_count(monkeypatch
     assert queue["queued"][0]["resolution"] == "720p"
     release.set()
     manager.executor.shutdown(wait=True)
+
+
+def test_video_jobs_resume_queued_work_after_manager_restart(monkeypatch, tmp_path):
+    project = make_project(tmp_path / "project")
+    monkeypatch.setattr(VideoProject, "load", classmethod(lambda cls, root, song_id: project))
+
+    def fake_render(project, options, destination, progress):
+        destination.write_bytes(b"video")
+        return {
+            "path": str(destination),
+            "size": 5,
+            "duration_ms": 1000,
+            "frames": 30,
+            "resolution": options.resolution,
+            "pre_roll_ms": 0,
+        }
+
+    monkeypatch.setattr(video_module, "render_video", fake_render)
+    state_path = tmp_path / "video_jobs.json"
+    options = VideoOptions(spectrum=False)
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "jobs": {
+                    "recovered": {
+                        "id": "recovered",
+                        "song_id": 1,
+                        "song": project.song,
+                        "resolution": options.resolution,
+                        "task_key": "1:recovered",
+                        "fingerprint": "recovered",
+                        "options": options.to_dict(),
+                        "status": "running",
+                        "progress": 42,
+                        "message": "正在渲染",
+                        "result": None,
+                        "error": None,
+                        "created_at": 1,
+                        "started_at": 1,
+                        "finished_at": None,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager = VideoJobManager(tmp_path / "outputs", state_path=state_path)
+    deadline = time.time() + 2
+    while time.time() < deadline and manager.get("recovered")["status"] not in {"done", "error"}:
+        time.sleep(0.01)
+    assert manager.get("recovered")["status"] == "done"
+    manager.executor.shutdown(wait=True)
