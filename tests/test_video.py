@@ -161,9 +161,26 @@ def test_countdown_is_above_left_top_lyric(tmp_path):
     renderer._draw_countdown(frame, 2_000)
     # The bar is intentionally in the left lyric area, rather than centered
     # along the bottom edge.
-    top = renderer._px(710)
+    top = renderer._px(video_module.COUNTDOWN_TOP)
     assert frame.getpixel((renderer._px(100), top + renderer._px(4)))[2] > 0
     assert frame.getpixel((renderer.width // 2, renderer._px(1002))) == (0, 0, 0)
+
+
+def test_countdown_clears_vinyl_in_single_and_secondary_lyric_modes(tmp_path):
+    project = make_project(tmp_path)
+
+    assert video_module.COUNTDOWN_TOP > 688
+    for lyric_mode in ("original", "translation", "romanization"):
+        renderer = FrameRenderer(
+            project, VideoOptions(spectrum=False, lyric_mode=lyric_mode)
+        )
+        frame = renderer.static_main.copy()
+        point = (renderer._px(200), renderer._px(video_module.COUNTDOWN_TOP) + renderer._px(4))
+        before = frame.getpixel(point)
+        renderer._draw_countdown(frame, 2_000)
+        # x=200 crosses the vinyl horizontally, so a lit bar here confirms
+        # that its vertical baseline is now below the artwork rather than on it.
+        assert frame.getpixel(point) != before
 
 
 def test_preview_uses_same_frame_renderer(tmp_path):

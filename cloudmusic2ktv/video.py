@@ -29,6 +29,7 @@ OPENING_DISC_START_RATIO = 0.62
 INTERLUDE_THRESHOLD_MS = 15_000
 INTERLUDE_COUNTDOWN_MS = 4_000
 MAX_INTERLUDE_SWEEP_MS = 8_000
+COUNTDOWN_TOP = 720
 SPECTRUM_CACHE_VERSION = 2
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
@@ -505,7 +506,7 @@ class FrameRenderer:
         if not text:
             return
         has_secondary = self.options.lyric_mode != "original"
-        top_positions = (720, 875) if has_secondary else (765, 900)
+        top_positions = (750, 895) if has_secondary else (765, 900)
         y = self._px(top_positions[row])
         max_width = self.width - self._px(150)
         font = self._fit_font(text, self._font(60, bold=True, text=text), max_width, 60, bold=True, minimum=36)
@@ -577,10 +578,10 @@ class FrameRenderer:
         draw = ImageDraw.Draw(frame, "RGBA")
         width = self._px(420)
         height = self._px(8)
-        # Place the cue above the left/top lyric block, matching the usual
-        # KTV layout and keeping the bottom of the frame free for controls.
+        # Keep one shared cue baseline below the vinyl artwork. Secondary
+        # lyrics start slightly lower to reserve room for this bar.
         left = self._px(76)
-        top = self._px(665 if self.options.lyric_mode != "original" else 710)
+        top = self._px(COUNTDOWN_TOP)
         draw.rounded_rectangle((left, top, left + width, top + height), radius=height // 2, fill=(255, 255, 255, 55))
         draw.rounded_rectangle(
             (left, top, left + int(width * ratio), top + height), radius=height // 2,
