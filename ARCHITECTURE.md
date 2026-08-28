@@ -98,6 +98,7 @@ Content-Range、Content-Length 和 Content-Disposition，并设置受控的
 - 素材状态和下载；
 - 视频预览、自定义背景、生成、队列和任务状态；
 - artifact HEAD/Range/下载。
+- 已登录用户申请的短期签名 artifact URL，以及无 Cookie 设备对签名 URL 的读取。
 
 管理员接口：
 
@@ -220,6 +221,6 @@ docker compose config
 - 只有受控代理才能设置 `CLOUDMUSIC2KTV_TRUST_PROXY=1`；
 - Cookie 导入只允许 HTTPS 或显式本地调试例外；
 - 当前允许名单成员共享 outputs 和全局队列，没有按用户隔离；
-- 当前 artifact 路由要求网站会话。浏览器播放正常，但不携带浏览器 Cookie 的独立投屏应用可能收到 401；正式公网投屏前应实现短期签名媒体 URL；
+- 普通 artifact URL 要求网站会话；投屏使用后端签发的短期 HMAC 签名 URL，设备无需携带网站 Cookie，过期后失效；
 - 前端开发代理使用 Flask，仅用于开发；生产使用 Nginx 镜像；
 - 后端 JSON 存储适合可信、低流量、单实例部署，不是多节点数据库。

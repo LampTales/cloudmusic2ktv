@@ -1,4 +1,5 @@
 import pytest
+from urllib.parse import parse_qs, urlsplit
 
 import app as web_app
 from cloudmusic2ktv.access import AllowlistStore
@@ -177,6 +178,44 @@ def test_video_artifact_can_be_downloaded_as_an_attachment(monkeypatch, tmp_path
     assert disposition.startswith("attachment; filename=ktv_720p__")
     assert "filename*=UTF-8''ktv_720p_%E6%B5%8B%E8%AF%95%E6%AD%8C%E6%89%8B_" in disposition
     assert disposition.endswith("%E6%AD%8C%E6%9B%B2.mp4")
+
+
+def test_video_share_url_can_be_used_without_a_browser_session(monkeypatch, tmp_path):
+    monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    monkeypatch.setenv("CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY", "test-media-signing-key")
+    client = member_client(monkeypatch, tmp_path)
+    directory = tmp_path / "123_artist_song"
+    directory.mkdir()
+    video = directory / "ktv_720p_012345abcdef.mp4"
+    video.write_bytes(b"shared-video")
+
+    response = client.get(f"/api/video/share/123/{video.name}")
+    assert response.status_code == 200
+    share = response.get_json()["share"]
+    parsed = urlsplit(share["url"])
+    query = parse_qs(parsed.query)
+    assert parsed.path == f"/api/video/artifact/123/{video.name}"
+    assert int(query["expires"][0]) == share["expires_at"]
+    assert len(query["signature"][0]) == 64
+
+    anonymous = web_app.app.test_client()
+    shared_response = anonymous.get(share["url"])
+    assert shared_response.status_code == 200
+    assert shared_response.data == b"shared-video"
+
+
+def test_expired_video_share_url_requires_login(monkeypatch, tmp_path):
+    monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    monkeypatch.setenv("CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY", "test-media-signing-key")
+    directory = tmp_path / "123_artist_song"
+    directory.mkdir()
+    video = directory / "ktv_720p_012345abcdef.mp4"
+    video.write_bytes(b"shared-video")
+    expired = web_app.signed_artifact_url(123, video.name, int(web_app.time.time()) - 1)
+
+    response = web_app.app.test_client().get(expired)
+    assert response.status_code == 401
+    assert response.get_json()["error"]["code"] == "login_required"
 
 
 def test_local_video_status_is_missing_when_song_has_no_generated_video(monkeypatch, tmp_path):

@@ -68,6 +68,8 @@ $env:CLOUDMUSIC2KTV_PORT = "7860"
 | `CLOUDMUSIC2KTV_ALLOW_INSECURE_COOKIE_IMPORT` | `0` | 允许通过非 HTTPS 导入网易云 Cookie；仅可信测试网络临时设为 `1` |
 | `CLOUDMUSIC2KTV_CORS_ORIGINS` | 空 | 允许浏览器跨域直连后端的 Origin，多个值用逗号分隔；同源前端代理模式应留空 |
 | `CLOUDMUSIC2KTV_SESSION_DAYS` | `90` | 网站登录会话有效天数 |
+| `CLOUDMUSIC2KTV_MEDIA_URL_TTL_SECONDS` | `3600` | 投屏短期签名 URL 的有效秒数 |
+| `CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY` | 自动生成 | 投屏 URL 签名密钥；正式部署应妥善保管 |
 
 后端容器内部固定监听 `0.0.0.0:7860`，`CLOUDMUSIC2KTV_BACKEND_PORT` 只调整宿主机一侧的发布端口。例如设置为 `17860` 后，端口映射为 `17860:7860`，前端应使用 `http://<BACKEND_PRIVATE_IP>:17860`。同时调整防火墙规则和健康检查地址。
 
@@ -95,6 +97,8 @@ $env:CLOUDMUSIC2KTV_PORT = "7860"
 | `CLOUDMUSIC2KTV_ALLOW_INSECURE_COOKIE_IMPORT` | 关闭 | 是否允许非 HTTPS Cookie 导入，仅用于可信调试网络 |
 | `CLOUDMUSIC2KTV_CORS_ORIGINS` | 空 | 浏览器可跨域访问后端的 Origin 白名单，使用逗号分隔 |
 | `CLOUDMUSIC2KTV_SESSION_DAYS` | `90` | 网站登录会话有效天数 |
+| `CLOUDMUSIC2KTV_MEDIA_URL_TTL_SECONDS` | `3600` | 投屏短期签名 URL 的有效秒数 |
+| `CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY` | 自动生成 | 投屏 URL 签名密钥；正式部署应妥善保管 |
 | `CLOUDMUSIC2KTV_TLS_CERT` | 空 | 后端直接提供 HTTPS 时使用的证书文件路径，必须与私钥同时设置 |
 | `CLOUDMUSIC2KTV_TLS_KEY` | 空 | 后端直接提供 HTTPS 时使用的私钥文件路径，必须与证书同时设置 |
 | `CLOUDMUSIC2KTV_FFMPEG` | 自动查找 | FFmpeg 可执行文件的明确路径 |
@@ -423,7 +427,7 @@ docker compose config
 
 涉及视频时还应验证 HEAD、HTTP Range、拖动播放和下载文件名。
 
-当前 artifact 路由要求网站会话。浏览器播放正常，但不携带浏览器 Cookie 的独立投屏应用可能收到 401；正式使用此类播放器前，需要实现短期签名媒体 URL。
+浏览器播放和下载需要网站会话。点击“投屏链接”时，后端会为已登录用户签发短期签名媒体 URL；投屏设备访问该 URL 不需要网站 Cookie，过期后自动失效。签名密钥保存在后端 `instance/media_signing.key`（或由 `CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY` 提供），不得暴露给前端。
 
 ## 安全边界
 

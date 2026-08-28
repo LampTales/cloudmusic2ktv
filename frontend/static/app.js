@@ -303,7 +303,13 @@ async function tryBrowserCast() {
   const selectedVideo = selectedCastVideo();
   if (!selectedSong || !selectedVideo) return notify("这首歌还没有可投屏的本地视频", true);
   const media = $("#castMediaElement");
-  const url = resolveBackendUrl(selectedVideo.url);
+  let url;
+  try {
+    url = await requestCastUrl(selectedVideo);
+  } catch (error) {
+    notify(error.message || "无法生成投屏地址", true);
+    return;
+  }
   if (media.src !== url) {
     media.src = url;
     media.load();
@@ -371,10 +377,26 @@ async function copyText(value) {
   return copied;
 }
 
+async function requestCastUrl(video) {
+  const data = await api(
+    `/api/video/share/${encodeURIComponent(selectedSong.id)}/${encodeURIComponent(video.filename)}`,
+    {headers: {}}
+  );
+  const value = data.share?.url;
+  if (!value) throw new Error("后端没有返回投屏地址");
+  return resolveBackendUrl(value);
+}
+
 async function openCastApp() {
   const video = selectedCastVideo();
   if (!selectedSong || !video) return notify("这首歌还没有可投屏的本地视频", true);
-  const url = resolveBackendUrl(video.url);
+  let url;
+  try {
+    url = await requestCastUrl(video);
+  } catch (error) {
+    notify(error.message || "无法生成投屏地址", true);
+    return;
+  }
   const shareData = {
     title: `${selectedSong.name} — ${selectedSong.artist}`,
     text: "CloudMusic2KTV 视频",
@@ -402,7 +424,10 @@ async function openCastApp() {
 function downloadCastVideo() {
   const video = selectedCastVideo();
   if (!selectedSong || !video) return notify("这首歌还没有可下载的本地视频", true);
-  const url = new URL(resolveBackendUrl(video.url));
+  // Backend artifact URLs are relative in same-origin deployments (for
+  // example `/ktv/api/video/...`). Supply the current page as the base so
+  // URL parsing also works when the frontend is mounted below a path prefix.
+  const url = new URL(resolveBackendUrl(video.url), window.location.href);
   url.searchParams.set("download", "1");
   const link = document.createElement("a");
   link.href = url.href;

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import hmac
 import os
@@ -43,6 +44,10 @@ INSTANCE = ROOT / "instance"
 OUTPUTS = ROOT / "outputs"
 SESSION_COOKIE = "cloudmusic2ktv_session"
 SESSION_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_SESSION_DAYS", "90")) * 24 * 60 * 60
+MEDIA_URL_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_MEDIA_URL_TTL_SECONDS", "3600"))
+MEDIA_SIGNING_KEY_FILE = INSTANCE / "media_signing.key"
+_media_signing_key_lock = threading.Lock()
+_media_signing_key_cache: bytes | None = None
 
 
 def normalize_base_path(value: str | None) -> str:
@@ -718,11 +723,34 @@ def video_job(job_id: str) -> Any:
     return jsonify({"ok": True, "job": job})
 
 
-@app.get("/api/video/artifact/<int:song_id>/<filename>")
+@app.get("/api/video/share/<int:song_id>/<filename>")
 @member_required
+def video_share(song_id: int, filename: str) -> Any:
+    if not VIDEO_FILE.fullmatch(filename):
+        return error_response("不允许分享该文件", "artifact_forbidden", 403)
+    path = local_artifact_path(song_id, filename)
+    if path is None:
+        return error_response("文件尚未生成", "artifact_missing", 404)
+    expires_at = int(time.time()) + max(60, MEDIA_URL_TTL_SECONDS)
+    return jsonify(
+        {
+            "ok": True,
+            "share": {
+                "url": signed_artifact_url(song_id, filename, expires_at, path.stat().st_mtime_ns),
+                "expires_at": expires_at,
+            },
+        }
+    )
+
+
+@app.get("/api/video/artifact/<int:song_id>/<filename>")
 def video_artifact(song_id: int, filename: str) -> Any:
     if not VIDEO_ARTIFACT.fullmatch(filename):
         return error_response("不允许访问该文件", "artifact_forbidden", 403)
+    if not verify_media_signature(song_id, filename):
+        _, failure = authorized_identity()
+        if failure is not None:
+            return failure
     path = local_artifact_path(song_id, filename)
     if path is None:
         return error_response("文件尚未生成", "artifact_missing", 404)
@@ -930,6 +958,70 @@ def artifact_url(song_id: int, filename: str, version: int | None = None) -> str
     """Build a proxy-friendly relative URL for a generated artifact."""
     path = f"{BASE_PATH}/api/video/artifact/{song_id}/{quote(filename, safe='')}"
     return f"{path}?version={version}" if version is not None else path
+
+
+def media_signature_payload(song_id: int, filename: str, expires_at: int) -> bytes:
+    return f"{song_id}\n{filename}\n{expires_at}".encode("utf-8")
+
+
+def media_signing_key() -> bytes:
+    """Return the stable secret used for temporary artifact URLs."""
+    global _media_signing_key_cache
+    configured = os.environ.get("CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY", "").strip()
+    if configured:
+        return configured.encode("utf-8")
+    with _media_signing_key_lock:
+        if _media_signing_key_cache is not None:
+            return _media_signing_key_cache
+        try:
+            value = MEDIA_SIGNING_KEY_FILE.read_bytes().strip()
+        except FileNotFoundError:
+            value = secrets.token_bytes(32)
+            MEDIA_SIGNING_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+            MEDIA_SIGNING_KEY_FILE.write_bytes(value)
+            try:
+                MEDIA_SIGNING_KEY_FILE.chmod(0o600)
+            except OSError:
+                pass
+        if not value:
+            raise RuntimeError("媒体 URL 签名密钥为空")
+        _media_signing_key_cache = value
+        return value
+
+
+def media_signature(song_id: int, filename: str, expires_at: int) -> str:
+    return hmac.new(
+        media_signing_key(),
+        media_signature_payload(song_id, filename, expires_at),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def verify_media_signature(song_id: int, filename: str) -> bool:
+    try:
+        expires_at = int(request.args.get("expires", "0"))
+    except (TypeError, ValueError):
+        return False
+    if expires_at <= int(time.time()):
+        return False
+    supplied = str(request.args.get("signature") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", supplied):
+        return False
+    try:
+        expected = media_signature(song_id, filename, expires_at)
+    except OSError:
+        return False
+    return hmac.compare_digest(supplied, expected)
+
+
+def signed_artifact_url(
+    song_id: int, filename: str, expires_at: int, version: int | None = None
+) -> str:
+    path = f"{BASE_PATH}/api/video/artifact/{song_id}/{quote(filename, safe='')}"
+    query = f"expires={expires_at}&signature={media_signature(song_id, filename, expires_at)}"
+    if version is not None:
+        query += f"&version={version}"
+    return f"{path}?{query}"
 
 
 def local_artifact_path(song_id: int, filename: str) -> Path | None:
