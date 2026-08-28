@@ -3,8 +3,8 @@
 The backend in :mod:`app` owns all accounts, NetEase access and media files.
 This process only serves the HTML/CSS/JavaScript assets and emits a tiny
 runtime configuration script.  In production the same assets can be served by
-Nginx; the `/api/` and `/api/video/artifact/` locations should then be proxied
-to the backend over ZeroTier.
+Nginx.  With an external prefix such as `/ktv`, this server mounts the assets
+below that prefix and strips it while proxying API requests to the backend.
 """
 
 from __future__ import annotations
@@ -12,17 +12,30 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import requests
-from flask import Flask, Response, jsonify, request, send_file
+from flask import Flask, Response, jsonify, redirect, request, send_file, send_from_directory
 
 
 ROOT = Path(__file__).resolve().parent
-frontend_app = Flask(
-    __name__,
-    static_folder=str(ROOT / "frontend" / "static"),
-    static_url_path="/static",
-)
+FRONTEND_ROOT = ROOT / "frontend"
+API_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+
+
+def normalize_base_path(value: str | None) -> str:
+    """Return a safe URL mount prefix such as ``/ktv`` or an empty string."""
+    text = str(value or "").strip()
+    if not text or text == "/":
+        return ""
+    if "?" in text or "#" in text or "\\" in text:
+        raise RuntimeError("CLOUDMUSIC2KTV_FRONTEND_BASE_PATH 只能包含 URL 路径")
+    if not text.startswith("/"):
+        text = "/" + text
+    parts = [part for part in text.split("/") if part]
+    if any(part in {".", ".."} for part in parts):
+        raise RuntimeError("CLOUDMUSIC2KTV_FRONTEND_BASE_PATH 不能包含 . 或 ..")
+    return "/" + "/".join(parts)
 
 
 def backend_origin() -> str:
@@ -31,14 +44,7 @@ def backend_origin() -> str:
     ).strip().rstrip("/")
 
 
-@frontend_app.get("/")
-def index():
-    return send_file(ROOT / "frontend" / "index.html")
-
-
-@frontend_app.get("/config.js")
-def config_js():
-    base_path = os.environ.get("CLOUDMUSIC2KTV_FRONTEND_BASE_PATH", "").strip().rstrip("/")
+def runtime_config(base_path: str) -> Response:
     # Empty means same-origin, which is the production reverse-proxy setup.
     # Local split testing sets this explicitly to the backend port.
     api_origin = os.environ.get("CLOUDMUSIC2KTV_API_ORIGIN", "").strip().rstrip("/")
@@ -50,21 +56,33 @@ def config_js():
         + json.dumps(api_origin, ensure_ascii=True)
         + ";\n"
     )
-    response = frontend_app.response_class(payload, mimetype="application/javascript")
+    response = Response(payload, mimetype="application/javascript")
     response.headers["Cache-Control"] = "no-store"
     return response
 
 
-@frontend_app.route("/api", defaults={"path": ""}, methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
-@frontend_app.route("/api/<path:path>", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
-def proxy_api(path: str):
+def proxy_api(path: str, base_path: str) -> Response | tuple[Response, int]:
     """Development reverse proxy keeping browser requests same-origin."""
     target = f"{backend_origin()}/api/{path}" if path else f"{backend_origin()}/api"
     headers = {
         key: value
         for key, value in request.headers.items()
-        if key.lower() not in {"host", "content-length", "connection"}
+        if key.lower()
+        not in {
+            "host",
+            "content-length",
+            "connection",
+            "x-forwarded-for",
+            "x-forwarded-host",
+            "x-forwarded-prefix",
+            "x-forwarded-proto",
+        }
     }
+    headers["X-Forwarded-For"] = request.remote_addr or ""
+    headers["X-Forwarded-Host"] = request.host
+    headers["X-Forwarded-Proto"] = request.scheme
+    if base_path:
+        headers["X-Forwarded-Prefix"] = base_path
     try:
         upstream = requests.request(
             request.method,
@@ -102,9 +120,57 @@ def proxy_api(path: str):
     )
 
 
-@frontend_app.get("/healthz")
-def healthz():
-    return jsonify({"ok": True, "status": "healthy"})
+def create_frontend_app(base_path: str | None = None) -> Flask:
+    """Build the development frontend at the configured external URL prefix."""
+    configured_base = normalize_base_path(
+        os.environ.get("CLOUDMUSIC2KTV_FRONTEND_BASE_PATH")
+        if base_path is None
+        else base_path
+    )
+    app = Flask(__name__, static_folder=None)
+
+    if configured_base:
+        @app.get("/")
+        def root_redirect() -> Response:
+            return redirect(f"{configured_base}/", code=302)
+
+        @app.get(configured_base)
+        def base_redirect() -> Response:
+            return redirect(f"{configured_base}/", code=308)
+
+    @app.get(f"{configured_base}/")
+    def index() -> Any:
+        return send_file(FRONTEND_ROOT / "index.html")
+
+    @app.get(f"{configured_base}/config.js")
+    def config_js() -> Response:
+        return runtime_config(configured_base)
+
+    @app.get(f"{configured_base}/static/<path:filename>")
+    def static_file(filename: str) -> Any:
+        return send_from_directory(FRONTEND_ROOT / "static", filename)
+
+    app.add_url_rule(
+        f"{configured_base}/api",
+        endpoint="proxy_api_root",
+        view_func=lambda: proxy_api("", configured_base),
+        methods=API_METHODS,
+    )
+    app.add_url_rule(
+        f"{configured_base}/api/<path:path>",
+        endpoint="proxy_api_path",
+        view_func=lambda path: proxy_api(path, configured_base),
+        methods=API_METHODS,
+    )
+
+    @app.get("/healthz")
+    def healthz() -> Any:
+        return jsonify({"ok": True, "status": "healthy"})
+
+    return app
+
+
+frontend_app = create_frontend_app()
 
 
 if __name__ == "__main__":

@@ -40,7 +40,10 @@ function appUrl(path) {
   const value = String(path || "");
   if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(value)) return value;
   const suffix = value.startsWith("/") ? value : `/${value}`;
-  const resolvedPath = `${APP_BASE_PATH}${suffix}` || suffix;
+  const alreadyPrefixed = APP_BASE_PATH && (
+    suffix === APP_BASE_PATH || suffix.startsWith(`${APP_BASE_PATH}/`)
+  );
+  const resolvedPath = alreadyPrefixed ? suffix : (`${APP_BASE_PATH}${suffix}` || suffix);
   return API_ORIGIN ? `${API_ORIGIN}${resolvedPath}` : resolvedPath;
 }
 

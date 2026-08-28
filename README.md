@@ -107,10 +107,12 @@ $env:CLOUDMUSIC2KTV_PORT = "7860"
 | `CLOUDMUSIC2KTV_BACKEND_ORIGIN` | `http://127.0.0.1:7860` | 开发代理访问的后端源地址 |
 | `CLOUDMUSIC2KTV_FRONTEND_HOST` | `127.0.0.1` | 开发前端监听地址；局域网测试可设为 `0.0.0.0` |
 | `CLOUDMUSIC2KTV_FRONTEND_PORT` | `8080` | 开发前端监听端口 |
-| `CLOUDMUSIC2KTV_FRONTEND_BASE_PATH` | 空 | 生成给浏览器的外部页面路径前缀 |
+| `CLOUDMUSIC2KTV_FRONTEND_BASE_PATH` | 空 | 开发前端的实际挂载路径；设为 `/ktv` 后使用 `/ktv/`、`/ktv/static/*` 和 `/ktv/api/*` |
 | `CLOUDMUSIC2KTV_API_ORIGIN` | 空 | 浏览器直连的 API Origin；推荐留空，让 `/api/*` 经过同源开发代理 |
 
 如果系统配置了 HTTP(S) 出站代理，而后端使用局域网或 VPN 地址，还应在操作系统的 `NO_PROXY` 中加入后端 IP；`NO_PROXY` 是通用系统变量，不是项目专用参数。
+
+同一个后端供多个前端访问时，每个前端必须使用与后端 `CLOUDMUSIC2KTV_BASE_PATH` 相同的外部路径。例如后端为 `/ktv`，公网入口和局域网开发前端都应通过各自地址下的 `/ktv/` 访问；域名和端口可以不同。
 
 ## 正式部署：前后端分机，直接拉取镜像
 
@@ -333,6 +335,7 @@ python frontend_server.py
 ```bash
 export CLOUDMUSIC2KTV_HOST=0.0.0.0
 export CLOUDMUSIC2KTV_PORT=7860
+export CLOUDMUSIC2KTV_BASE_PATH=/ktv
 # 仅在可信测试网络通过 HTTP 测试 Cookie 导入时使用：
 export CLOUDMUSIC2KTV_ALLOW_INSECURE_COOKIE_IMPORT=1
 python app.py
@@ -344,8 +347,11 @@ python app.py
 export CLOUDMUSIC2KTV_BACKEND_ORIGIN=http://<BACKEND_PRIVATE_IP>:7860
 export CLOUDMUSIC2KTV_FRONTEND_HOST=0.0.0.0
 export CLOUDMUSIC2KTV_FRONTEND_PORT=18080
+export CLOUDMUSIC2KTV_FRONTEND_BASE_PATH=/ktv
 python frontend_server.py
 ```
+
+访问 `http://<FRONTEND_PRIVATE_IP>:18080/ktv/`。开发前端会将根路径重定向到 `/ktv/`，并把 `/ktv/api/*` 剥离前缀后代理到后端 `/api/*`。如果后端 `CLOUDMUSIC2KTV_BASE_PATH` 留空，则开发前端也应留空 `CLOUDMUSIC2KTV_FRONTEND_BASE_PATH`，并从 `/` 访问。
 
 只在受信任网络中监听 `0.0.0.0`，并用防火墙限制测试来源；仅在前端节点本机访问时可改为 `127.0.0.1`。
 
