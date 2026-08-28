@@ -1,4 +1,9 @@
+from pathlib import Path
+
 import frontend_server
+
+
+FRONTEND_ROOT = Path(__file__).resolve().parents[1] / "frontend"
 
 
 def test_standalone_frontend_serves_assets_and_runtime_config(monkeypatch):
@@ -75,3 +80,23 @@ def test_standalone_frontend_keeps_root_routes_without_a_base_path(monkeypatch):
     assert client.get("/").status_code == 200
     assert client.get("/config.js").status_code == 200
     assert client.get("/static/app.js").status_code == 200
+
+
+def test_login_uses_password_manager_form_semantics():
+    page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
+
+    assert '<form id="websiteLoginForm" autocomplete="on">' in page
+    assert 'name="username" type="text"' in page
+    assert 'autocomplete="section-login username"' in page
+    assert 'name="password" type="password"' in page
+    assert 'autocomplete="section-login current-password"' in page
+    assert 'id="login" class="primary" type="submit"' in page
+    assert 'id="searchInput" name="song-search" type="search"' in page
+
+
+def test_system_share_payload_contains_only_the_video_url():
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "const shareData = {url};" in script
+    assert 'text: "CloudMusic2KTV 视频"' not in script
+    assert "new URL(resolveBackendUrl(value), window.location.href).href" in script

@@ -384,7 +384,10 @@ async function requestCastUrl(video) {
   );
   const value = data.share?.url;
   if (!value) throw new Error("后端没有返回投屏地址");
-  return resolveBackendUrl(value);
+  // The backend intentionally returns proxy-friendly relative paths. Media
+  // elements resolve those automatically, but clipboard and Web Share
+  // consumers need a self-contained absolute URL.
+  return new URL(resolveBackendUrl(value), window.location.href).href;
 }
 
 async function openCastApp() {
@@ -397,11 +400,10 @@ async function openCastApp() {
     notify(error.message || "无法生成投屏地址", true);
     return;
   }
-  const shareData = {
-    title: `${selectedSong.name} — ${selectedSong.artist}`,
-    text: "CloudMusic2KTV 视频",
-    url,
-  };
+  // Share only the URL. Android and some desktop share targets concatenate
+  // `text` and `url`; media players then try to open the entire sentence as
+  // an address and fail even though the signed URL itself is playable.
+  const shareData = {url};
   if (typeof navigator.share === "function") {
     try {
       if (typeof navigator.canShare !== "function" || navigator.canShare(shareData)) {
@@ -866,8 +868,9 @@ $("#sendCaptcha").addEventListener("click", async (event) => {
   } catch (error) { busy(button, false); notify(error.message, true); }
 });
 
-$("#login").addEventListener("click", async (event) => {
-  const button = event.currentTarget;
+$("#websiteLoginForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = $("#login");
   busy(button, true, "登录中…");
   try {
     await api("/api/auth/login", {method: "POST", body: JSON.stringify({username: $("#websiteUsername").value, password: $("#websitePassword").value})});
@@ -877,8 +880,9 @@ $("#login").addEventListener("click", async (event) => {
   finally { busy(button, false); }
 });
 
-$("#register").addEventListener("click", async (event) => {
-  const button = event.currentTarget;
+$("#websiteRegisterForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = $("#register");
   busy(button, true, "创建中…");
   let cookieSubmitted = false;
   try {
