@@ -58,13 +58,17 @@ Nginx / frontend_server.py           outputs/
 - `nginx.conf.template`：静态服务和 `/api/` 流式代理。
 
 `frontend_server.py` 只用于本地开发。它提供同一批静态资源，并通过
-`CLOUDMUSIC2KTV_BACKEND_ORIGIN` 转发 `/api/*`。代理保留 Cookie、Range、
-Content-Range、Content-Length 和 Content-Disposition。
+`CLOUDMUSIC2KTV_BACKEND_ORIGIN` 转发 API。`CLOUDMUSIC2KTV_FRONTEND_BASE_PATH`
+为空时使用 `/api/*`；设为 `/ktv` 时，实际服务 `/ktv/*`，并将
+`/ktv/api/*` 剥离前缀后转发到后端 `/api/*`。代理保留 Cookie、Range、
+Content-Range、Content-Length 和 Content-Disposition，并设置受控的
+`X-Forwarded-*` 请求头。
 
 前端 URL 配置：
 
 - `CLOUDMUSIC2KTV_API_ORIGIN` 为空时使用同源 `/api`；
 - `CLOUDMUSIC2KTV_BASE_PATH` 为空时，从页面路径推断反向代理前缀；
+- 后端与所有前端入口使用相同的外部路径前缀，域名和端口可以不同；
 - 生产部署使用同源代理，不启用浏览器跨域；
 - 显式 API origin 只保留给跨端口诊断。
 
