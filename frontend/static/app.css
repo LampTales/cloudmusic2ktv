@@ -280,6 +280,7 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .advanced-options { margin-top: 17px; border-top: 1px solid var(--line); }
 .advanced-options summary { padding: 15px 2px 4px; color: #555; cursor: pointer; font-size: 13px; font-weight: 800; }
 .advanced-content { display: grid; gap: 12px; padding-top: 12px; }
+.advanced-select-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .toggle { display: flex; align-items: center; gap: 9px; cursor: pointer; }
 .toggle input { width: 18px; min-height: 18px; margin: 0; accent-color: var(--red); }
 .range-label { display: grid; grid-template-columns: auto 1fr 40px; align-items: center; gap: 9px; }
@@ -459,6 +460,7 @@ button:disabled { opacity: .48; cursor: not-allowed; }
   .preview-actions { align-items: flex-start; }
   .preview-actions > span { padding-top: 8px; }
   .option-grid { grid-template-columns: 1fr; }
+  .advanced-select-grid { grid-template-columns: 1fr; }
   .render-row { align-items: stretch; flex-direction: column; gap: 13px; }
   .render-submit-copy { text-align: left; }
   .render-button { width: 100%; }

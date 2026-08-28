@@ -100,3 +100,21 @@ def test_system_share_payload_contains_only_the_video_url():
     assert "const shareData = {url};" in script
     assert 'text: "CloudMusic2KTV 视频"' not in script
     assert "new URL(resolveBackendUrl(value), window.location.href).href" in script
+
+
+def test_highlight_mode_is_primary_and_resolution_is_advanced():
+    page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    highlight = page.index('id="lyricHighlightMode"')
+    advanced = page.index('<details class="advanced-options">')
+    resolution = page.index('id="videoResolution"')
+    assert highlight < advanced < resolution
+    assert '<div class="advanced-select-grid">' in page
+    assert ".advanced-select-grid { display: grid; grid-template-columns: 1fr 1fr;" in (
+        FRONTEND_ROOT / "static" / "app.css"
+    ).read_text(encoding="utf-8")
+    assert '<option value="line">整句点亮（不扫色）</option>' in page
+    assert '<option value="sweep">匀速扫色</option>' in page
+    assert 'const lyricHighlightMode = $("#lyricHighlightMode")?.value || "line"' in script
+    assert "lyric_highlight_mode: lyricHighlightMode" in script

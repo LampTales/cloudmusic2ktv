@@ -13,6 +13,7 @@ from cloudmusic2ktv.video import (
     VideoProject,
     VideoJobManager,
     render_preview,
+    video_options_fingerprint,
 )
 import cloudmusic2ktv.video as video_module
 
@@ -45,6 +46,20 @@ def make_project(tmp_path: Path, first_start: int = 1000) -> VideoProject:
 def test_video_options_excludes_overloaded_three_language_mode():
     with pytest.raises(VideoError):
         VideoOptions.from_mapping({"lyric_mode": "translation_and_romanization"})
+
+
+def test_lyric_highlight_defaults_to_whole_line_and_validates_modes():
+    assert VideoOptions.from_mapping({}).lyric_highlight_mode == "line"
+    assert VideoOptions.from_mapping({"lyric_highlight_mode": "sweep"}).lyric_highlight_mode == "sweep"
+    with pytest.raises(VideoError):
+        VideoOptions.from_mapping({"lyric_highlight_mode": "word"})
+
+
+def test_lyric_highlight_mode_changes_option_fingerprint():
+    whole_line = VideoOptions(spectrum=False)
+    sweep = VideoOptions(spectrum=False, lyric_highlight_mode="sweep")
+
+    assert video_options_fingerprint(whole_line) != video_options_fingerprint(sweep)
 
 
 def test_opening_adds_preroll_only_when_lyrics_start_early(tmp_path):
@@ -117,6 +132,26 @@ def test_interlude_hides_following_line_and_resets_to_left_row(tmp_path):
     captured.clear()
     renderer._draw_lyric_pair(frame, 1, 0.5)
     assert captured[0] == ("第二句", 0, 0.5)
+
+
+def test_active_lyric_is_whole_line_or_uniform_sweep(tmp_path):
+    project = make_project(tmp_path)
+    frame = Image.new("RGB", (1920, 1080), (0, 0, 0))
+
+    whole_line = FrameRenderer(project, VideoOptions(spectrum=False))
+    whole_line_progress = []
+    whole_line._draw_lyric_pair = lambda rendered, index, progress: whole_line_progress.append(progress)
+    whole_line._draw_lyrics(frame, 5_000)
+
+    sweep = FrameRenderer(
+        project, VideoOptions(spectrum=False, lyric_highlight_mode="sweep")
+    )
+    sweep_progress = []
+    sweep._draw_lyric_pair = lambda rendered, index, progress: sweep_progress.append(progress)
+    sweep._draw_lyrics(frame, 5_000)
+
+    assert whole_line_progress == [1.0]
+    assert sweep_progress == [0.5]
 
 
 def test_countdown_is_above_left_top_lyric(tmp_path):

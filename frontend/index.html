@@ -198,34 +198,42 @@
             <label id="customBackgroundWrap" class="hidden">背景图片
               <input id="customBackground" type="file" accept="image/png,image/jpeg,image/webp">
             </label>
-            <label>歌词扫色
+            <label>点亮颜色
               <select id="accentMode">
                 <option value="blue">默认蓝色</option>
                 <option value="cover">自动匹配封面</option>
                 <option value="custom">自定义颜色</option>
               </select>
             </label>
-            <label id="accentColorWrap" class="hidden">扫色颜色
-              <input id="accentColor" type="color" value="#4f8cff">
-            </label>
-            <label>分辨率
-              <select id="videoResolution">
-                <option value="1080p">1920 × 1080</option>
-                <option value="720p" selected>1280 × 720</option>
+            <label>扫色方式
+              <select id="lyricHighlightMode">
+                <option value="line">整句点亮（不扫色）</option>
+                <option value="sweep">匀速扫色</option>
               </select>
+            </label>
+            <label id="accentColorWrap" class="hidden">自定义点亮颜色
+              <input id="accentColor" type="color" value="#4f8cff">
             </label>
           </div>
 
           <details class="advanced-options">
             <summary>高级设置</summary>
             <div class="advanced-content">
-              <label>视频画质
-                <select id="videoQuality">
-                  <option value="high">高画质 · 较慢</option>
-                  <option value="balanced">平衡</option>
-                  <option value="compact" selected>较小文件 · 较快</option>
-                </select>
-              </label>
+              <div class="advanced-select-grid">
+                <label>分辨率
+                  <select id="videoResolution">
+                    <option value="1080p">1920 × 1080</option>
+                    <option value="720p" selected>1280 × 720</option>
+                  </select>
+                </label>
+                <label>视频画质
+                  <select id="videoQuality">
+                    <option value="high">高画质 · 较慢</option>
+                    <option value="balanced">平衡</option>
+                    <option value="compact" selected>较小文件 · 较快</option>
+                  </select>
+                </label>
+              </div>
               <label class="toggle"><input id="spectrumEnabled" type="checkbox" checked><span>显示动态频谱</span></label>
               <label class="range-label">频谱强度 <input id="spectrumOpacity" type="range" min="10" max="100" value="65"><output id="spectrumValue">65%</output></label>
               <label class="toggle"><input id="openingEnabled" type="checkbox" checked><span>自动开场动画</span></label>

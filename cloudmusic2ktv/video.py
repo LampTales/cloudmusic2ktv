@@ -33,6 +33,7 @@ SPECTRUM_CACHE_VERSION = 2
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
 LYRIC_MODES = {"original", "translation", "romanization"}
+LYRIC_HIGHLIGHT_MODES = {"line", "sweep"}
 BACKGROUND_MODES = {"blur", "gradient", "solid", "custom"}
 ACCENT_MODES = {"blue", "cover", "custom"}
 QUALITY_MAP = {
@@ -49,6 +50,7 @@ class VideoError(RuntimeError):
 @dataclass(frozen=True)
 class VideoOptions:
     lyric_mode: str = "original"
+    lyric_highlight_mode: str = "line"
     background_mode: str = "blur"
     background_color: str = "#171b26"
     accent_mode: str = "blue"
@@ -65,6 +67,7 @@ class VideoOptions:
         value = value or {}
         options = cls(
             lyric_mode=str(value.get("lyric_mode") or "original"),
+            lyric_highlight_mode=str(value.get("lyric_highlight_mode") or "line"),
             background_mode=str(value.get("background_mode") or "blur"),
             background_color=str(value.get("background_color") or "#171b26"),
             accent_mode=str(value.get("accent_mode") or "blue"),
@@ -82,6 +85,8 @@ class VideoOptions:
     def validate(self) -> None:
         if self.lyric_mode not in LYRIC_MODES:
             raise VideoError("不支持的歌词显示模式")
+        if self.lyric_highlight_mode not in LYRIC_HIGHLIGHT_MODES:
+            raise VideoError("不支持的扫色方式")
         if self.background_mode not in BACKGROUND_MODES:
             raise VideoError("不支持的背景模式")
         if self.accent_mode not in ACCENT_MODES:
@@ -431,7 +436,8 @@ class FrameRenderer:
             self._draw_lyric_pair(frame, state["index"], None)
             self._draw_countdown(frame, state["remaining"])
             return
-        self._draw_lyric_pair(frame, state["index"], state["progress"])
+        progress = state["progress"] if self.options.lyric_highlight_mode == "sweep" else 1.0
+        self._draw_lyric_pair(frame, state["index"], progress)
 
     def _lyric_state(self, song_time_ms: int) -> dict[str, Any]:
         starts = [int(line["start_ms"]) for line in self.project.timeline]

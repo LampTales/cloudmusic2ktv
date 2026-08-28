@@ -1081,8 +1081,10 @@ $("#download").addEventListener("click", async (event) => {
 });
 
 function videoOptions() {
+  const lyricHighlightMode = $("#lyricHighlightMode")?.value || "line";
   return {
     lyric_mode: $("#lyricMode").value,
+    lyric_highlight_mode: lyricHighlightMode,
     background_mode: $("#backgroundMode").value,
     background_color: $("#backgroundColor").value,
     accent_mode: $("#accentMode").value,
@@ -1128,7 +1130,8 @@ async function refreshVideoPreview(silent = false) {
     image.style.display = "block";
     $("#previewPlaceholder").classList.add("hidden");
     const preRoll = data.preview.pre_roll_ms ? ` · 含 ${data.preview.pre_roll_ms / 1000} 秒开场预卷` : "";
-    $("#previewMeta").textContent = `${data.preview.width} × ${data.preview.height} · 扫色 ${data.preview.accent}${preRoll}`;
+    const highlight = ($("#lyricHighlightMode")?.value || "line") === "sweep" ? "匀速扫色" : "整句点亮";
+    $("#previewMeta").textContent = `${data.preview.width} × ${data.preview.height} · ${highlight} · 点亮颜色 ${data.preview.accent}${preRoll}`;
   } catch (error) {
     $("#videoPreviewImage").style.display = "none";
     $("#previewPlaceholder").classList.remove("hidden");
