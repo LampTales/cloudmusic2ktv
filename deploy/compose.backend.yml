@@ -1,6 +1,6 @@
 services:
   backend:
-    image: ${CLOUDMUSIC2KTV_BACKEND_IMAGE:-ghcr.io/lamptales/cloudmusic2ktv-backend:latest}
+    image: ${CLOUDMUSIC2KTV_BACKEND_IMAGE:-docker.io/lamptales/cloudmusic2ktv-backend:latest}
     environment:
       CLOUDMUSIC2KTV_HOST: 0.0.0.0
       CLOUDMUSIC2KTV_PORT: 7860

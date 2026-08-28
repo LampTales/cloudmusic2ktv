@@ -189,7 +189,7 @@ outputs/<song_id>_<artist>_<name>/
 - 挂载 `instance/`、`outputs/`；
 - Gunicorn 单 worker、四线程。
 
-GitHub Actions 在同一提交上测试代码，然后通过矩阵构建两个 amd64/arm64 镜像。两个镜像共享版本标签但可以独立部署和回滚，因此无需拆仓库。
+GitHub Actions 在同一提交上测试代码，然后通过矩阵构建两个 amd64/arm64 镜像，并将同一份构建结果同时发布到 Docker Hub 和 GHCR。两个镜像共享版本标签但可以独立部署和回滚，因此无需拆仓库。
 
 ## 10. 测试契约
 

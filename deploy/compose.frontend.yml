@@ -1,6 +1,6 @@
 services:
   frontend:
-    image: ${CLOUDMUSIC2KTV_FRONTEND_IMAGE:-ghcr.io/lamptales/cloudmusic2ktv-frontend:latest}
+    image: ${CLOUDMUSIC2KTV_FRONTEND_IMAGE:-docker.io/lamptales/cloudmusic2ktv-frontend:latest}
     environment:
       BACKEND_UPSTREAM: ${CLOUDMUSIC2KTV_BACKEND_UPSTREAM:?Set the private backend URL}
     ports:

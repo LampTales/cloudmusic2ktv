@@ -13,12 +13,14 @@ CloudMusic2KTV 将选定的网易云音乐歌曲制作成带歌词的 KTV 视频
 
 ## 镜像与端口
 
-推荐直接使用 GitHub Actions 发布的镜像：
+推荐直接使用 GitHub Actions 发布到 Docker Hub 的镜像：
 
 ```text
-ghcr.io/lamptales/cloudmusic2ktv-frontend:latest
-ghcr.io/lamptales/cloudmusic2ktv-backend:latest
+docker.io/lamptales/cloudmusic2ktv-frontend:latest
+docker.io/lamptales/cloudmusic2ktv-backend:latest
 ```
+
+同一份构建结果也会发布到 `ghcr.io/lamptales/cloudmusic2ktv-frontend` 和 `ghcr.io/lamptales/cloudmusic2ktv-backend`，可作为备用镜像源。
 
 默认端口：
 
@@ -58,7 +60,7 @@ $env:CLOUDMUSIC2KTV_PORT = "7860"
 
 | 参数 | 默认值 | 含义 |
 | --- | --- | --- |
-| `CLOUDMUSIC2KTV_BACKEND_IMAGE` | `ghcr.io/lamptales/cloudmusic2ktv-backend:latest` | 后端镜像及标签，可固定为版本或 `sha-*` 标签 |
+| `CLOUDMUSIC2KTV_BACKEND_IMAGE` | `docker.io/lamptales/cloudmusic2ktv-backend:latest` | 后端镜像及标签，可固定为版本或 `sha-*` 标签 |
 | `CLOUDMUSIC2KTV_BACKEND_BIND_ADDRESS` | `127.0.0.1` | 后端发布到宿主机的监听地址；分机部署应填私有/VPN IP，不应填公网 IP |
 | `CLOUDMUSIC2KTV_BACKEND_PORT` | `7860` | 后端发布到宿主机的端口，前端节点通过这个端口连接 |
 | `CLOUDMUSIC2KTV_BASE_PATH` | 空 | 公网页面的路径前缀；根路径部署留空，部署到 `/ktv/` 时填 `/ktv` |
@@ -75,7 +77,7 @@ $env:CLOUDMUSIC2KTV_PORT = "7860"
 
 | 参数 | 默认值 | 含义 |
 | --- | --- | --- |
-| `CLOUDMUSIC2KTV_FRONTEND_IMAGE` | `ghcr.io/lamptales/cloudmusic2ktv-frontend:latest` | 前端镜像及标签 |
+| `CLOUDMUSIC2KTV_FRONTEND_IMAGE` | `docker.io/lamptales/cloudmusic2ktv-frontend:latest` | 前端镜像及标签 |
 | `CLOUDMUSIC2KTV_FRONTEND_BIND_ADDRESS` | `127.0.0.1` | 前端容器发布到宿主机的地址；由同机公网 Nginx 代理时保留 `127.0.0.1` |
 | `CLOUDMUSIC2KTV_FRONTEND_PORT` | `8080` | 前端容器发布到宿主机的端口 |
 | `CLOUDMUSIC2KTV_BACKEND_UPSTREAM` | 必填 | 前端 Nginx 访问后端的完整源地址，例如 `http://10.0.0.2:17860` |
@@ -148,7 +150,7 @@ curl -fsSLo .env https://raw.githubusercontent.com/LampTales/cloudmusic2ktv/main
 编辑 `.env`：
 
 ```dotenv
-CLOUDMUSIC2KTV_BACKEND_IMAGE=ghcr.io/lamptales/cloudmusic2ktv-backend:latest
+CLOUDMUSIC2KTV_BACKEND_IMAGE=docker.io/lamptales/cloudmusic2ktv-backend:latest
 CLOUDMUSIC2KTV_BACKEND_BIND_ADDRESS=<BACKEND_PRIVATE_IP>
 CLOUDMUSIC2KTV_BACKEND_PORT=7860
 CLOUDMUSIC2KTV_BASE_PATH=/ktv
@@ -191,7 +193,7 @@ curl -fsSLo .env https://raw.githubusercontent.com/LampTales/cloudmusic2ktv/main
 编辑 `.env`：
 
 ```dotenv
-CLOUDMUSIC2KTV_FRONTEND_IMAGE=ghcr.io/lamptales/cloudmusic2ktv-frontend:latest
+CLOUDMUSIC2KTV_FRONTEND_IMAGE=docker.io/lamptales/cloudmusic2ktv-frontend:latest
 CLOUDMUSIC2KTV_FRONTEND_BIND_ADDRESS=127.0.0.1
 CLOUDMUSIC2KTV_FRONTEND_PORT=8080
 CLOUDMUSIC2KTV_BACKEND_UPSTREAM=http://<BACKEND_PRIVATE_IP>:<BACKEND_PORT>
@@ -247,8 +249,8 @@ docker compose up -d
 需要回滚时，把 `.env` 中的 `latest` 改成同一版本或提交 SHA 标签，例如：
 
 ```dotenv
-CLOUDMUSIC2KTV_BACKEND_IMAGE=ghcr.io/lamptales/cloudmusic2ktv-backend:sha-0123456
-CLOUDMUSIC2KTV_FRONTEND_IMAGE=ghcr.io/lamptales/cloudmusic2ktv-frontend:sha-0123456
+CLOUDMUSIC2KTV_BACKEND_IMAGE=docker.io/lamptales/cloudmusic2ktv-backend:sha-0123456
+CLOUDMUSIC2KTV_FRONTEND_IMAGE=docker.io/lamptales/cloudmusic2ktv-frontend:sha-0123456
 ```
 
 前端和后端可以独立更新，但建议使用同一提交或版本标签，避免 API 契约不一致。
@@ -266,8 +268,8 @@ Copy-Item .env.example .env
 编辑 `.env`：
 
 ```dotenv
-CLOUDMUSIC2KTV_BACKEND_IMAGE=ghcr.io/lamptales/cloudmusic2ktv-backend:latest
-CLOUDMUSIC2KTV_FRONTEND_IMAGE=ghcr.io/lamptales/cloudmusic2ktv-frontend:latest
+CLOUDMUSIC2KTV_BACKEND_IMAGE=docker.io/lamptales/cloudmusic2ktv-backend:latest
+CLOUDMUSIC2KTV_FRONTEND_IMAGE=docker.io/lamptales/cloudmusic2ktv-frontend:latest
 CLOUDMUSIC2KTV_BIND_ADDRESS=127.0.0.1
 CLOUDMUSIC2KTV_FRONTEND_PORT=8080
 ```
@@ -407,7 +409,9 @@ Dockerfile.frontend → cloudmusic2ktv-frontend
 Dockerfile.backend  → cloudmusic2ktv-backend
 ```
 
-两个镜像均发布 `latest`、`sha-*` 和 `v*.*.*` 标签，并支持 `linux/amd64`、`linux/arm64`。Pull Request 只测试和构建，不推送。
+两个镜像均以同一组 `latest`、`sha-*` 和 `v*.*.*` 标签发布到 Docker Hub 和 GHCR，并支持 `linux/amd64`、`linux/arm64`。Pull Request 只测试和构建，不登录或推送镜像仓库。
+
+Docker Hub 发布需要在 GitHub Actions 中配置仓库变量 `DOCKERHUB_USERNAME` 和仓库 Secret `DOCKERHUB_TOKEN`。前者填写 Docker Hub 用户名，后者使用具有 Read & Write 权限的 Docker Hub Access Token。也可以从 Actions 页面手动运行此工作流。
 
 ## 验证
 
