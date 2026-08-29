@@ -400,7 +400,28 @@
       </div>
       <div class="admin-section">
         <div class="admin-section-heading"><strong>当前允许名单</strong><button id="refreshAdminUsers" class="text-action" type="button">刷新</button></div>
-        <div id="adminUserList" class="admin-list"></div>
+        <div id="adminUserList" class="admin-list admin-user-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="adminEditModal" class="modal-backdrop admin-edit-modal hidden" role="dialog" aria-modal="true" aria-labelledby="adminEditModalTitle">
+    <div class="modal-panel admin-edit-panel">
+      <div class="modal-heading">
+        <div><p class="eyebrow">ACCOUNT EDIT</p><h2 id="adminEditModalTitle">编辑名单账号</h2></div>
+        <button id="closeAdminEditModal" class="text-action modal-close" type="button" aria-label="关闭账号编辑">关闭</button>
+      </div>
+      <div class="admin-edit-identity">
+        <img id="adminEditAvatar" class="admin-edit-avatar" alt="">
+        <div><strong id="adminEditNickname">网易云用户</strong><small id="adminEditUserId"></small></div>
+      </div>
+      <p id="adminEditHint" class="helper-text admin-edit-hint"></p>
+      <label id="adminEditRoleLabel" class="admin-edit-role-label">权限
+        <select id="adminEditRole"><option value="user">普通用户</option><option value="admin">管理员</option></select>
+      </label>
+      <div class="admin-edit-actions">
+        <button id="saveAdminEdit" class="primary" type="button">保存权限</button>
+        <button id="removeAdminEdit" class="secondary" type="button">移出允许名单</button>
       </div>
     </div>
   </div>

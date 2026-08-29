@@ -21,6 +21,7 @@ let qrPollTimer = null;
 let qrExpireTimer = null;
 let qrFlowId = 0;
 let ydDeviceTokenPromise = null;
+let adminEditUser = null;
 const API_ORIGIN = String(window.CLOUDMUSIC2KTV_API_ORIGIN || "").replace(/\/+$/, "");
 const APP_BASE_PATH = String(
   window.CLOUDMUSIC2KTV_BASE_PATH || inferBasePath()
@@ -706,6 +707,7 @@ function openAdminModal() {
 }
 
 function closeAdminModal() {
+  closeAdminEditModal();
   $("#adminModal").classList.add("hidden");
   document.body.classList.remove("modal-open");
   $("#manageAllowlist").focus();
@@ -734,27 +736,40 @@ function renderAdminUserRow(user, removable) {
   badge.className = `admin-role-badge ${roleClass}`;
   badge.textContent = user.role === "root" ? "Root" : isAdmin ? "管理" : "用户";
   row.append(badge);
-  const canDelete = removable && user.role !== "root" &&
+  const canEdit = removable && user.role !== "root" &&
     (accountRole === "root" || (accountRole === "admin" && user.role === "user"));
-  if (canDelete) {
-    const remove = document.createElement("button");
-    remove.className = "secondary compact";
-    remove.textContent = "移除";
-    remove.addEventListener("click", () => deleteAdminUser(user.userId, remove));
-    row.append(remove);
-  }
-  if (removable && accountRole === "root" && user.role !== "root") {
-    const role = document.createElement("select");
-    role.className = "admin-role-select";
-    role.innerHTML = '<option value="user">用户</option><option value="admin">管理</option>';
-    role.value = user.role === "admin" ? "admin" : "user";
-    const save = document.createElement("button");
-    save.className = "secondary compact";
-    save.textContent = "保存权限";
-    save.addEventListener("click", () => updateAdminUserRole(user.userId, role.value, save));
-    row.append(role, save);
+  if (canEdit) {
+    const edit = document.createElement("button");
+    edit.className = "secondary compact";
+    edit.textContent = "编辑";
+    edit.addEventListener("click", () => openAdminEditModal(user));
+    row.append(edit);
   }
   return row;
+}
+
+function openAdminEditModal(user) {
+  if (!user || user.role === "root") return;
+  const canChangeRole = accountRole === "root";
+  adminEditUser = user;
+  $("#adminEditNickname").textContent = user.nickname || "网易云用户";
+  $("#adminEditUserId").textContent = `ID ${user.userId}`;
+  const avatar = $("#adminEditAvatar");
+  avatar.src = user.avatarUrl || "";
+  $("#adminEditRole").value = user.role === "admin" ? "admin" : "user";
+  $("#adminEditRole").disabled = !canChangeRole;
+  $("#adminEditRoleLabel").classList.toggle("hidden", !canChangeRole);
+  $("#saveAdminEdit").classList.toggle("hidden", !canChangeRole);
+  $("#adminEditHint").textContent = canChangeRole
+    ? "可以在管理员和普通用户之间调整权限，或移出允许名单。"
+    : "管理员只能移出普通用户，不能调整账号权限。";
+  $("#adminEditModal").classList.remove("hidden");
+  (canChangeRole ? $("#saveAdminEdit") : $("#removeAdminEdit")).focus();
+}
+
+function closeAdminEditModal() {
+  adminEditUser = null;
+  $("#adminEditModal")?.classList.add("hidden");
 }
 
 function configureAdminRolePicker() {
@@ -831,6 +846,7 @@ async function updateAdminUserRole(userId, role, button) {
       body: JSON.stringify({role}),
     });
     notify("用户权限已更新");
+    closeAdminEditModal();
     await refreshAdminUsers();
   } catch (error) { notify(error.message, true); }
   finally { busy(button, false); }
@@ -841,11 +857,21 @@ async function deleteAdminUser(userId, button) {
   busy(button, true, "删除中…");
   try {
     await api(`/api/admin/users/${encodeURIComponent(userId)}`, {method: "DELETE"});
-    notify("已删除名单账号");
+    notify("已移出允许名单");
+    if (adminEditUser && String(adminEditUser.userId) === String(userId)) closeAdminEditModal();
     await refreshAdminUsers();
   } catch (error) { notify(error.message, true); }
   finally { busy(button, false); }
 }
+
+$("#saveAdminEdit").addEventListener("click", () => {
+  if (!adminEditUser || accountRole !== "root") return;
+  updateAdminUserRole(adminEditUser.userId, $("#adminEditRole").value, $("#saveAdminEdit"));
+});
+$("#removeAdminEdit").addEventListener("click", () => {
+  if (!adminEditUser) return;
+  deleteAdminUser(adminEditUser.userId, $("#removeAdminEdit"));
+});
 
 function setupSectionNavigation() {
   const links = [...document.querySelectorAll(".page-nav a")];
@@ -874,6 +900,8 @@ $("#accountModal").addEventListener("click", event => { if (event.target === eve
 $("#manageAllowlist").addEventListener("click", openAdminModal);
 $("#closeAdminModal").addEventListener("click", closeAdminModal);
 $("#adminModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeAdminModal(); });
+$("#closeAdminEditModal").addEventListener("click", closeAdminEditModal);
+$("#adminEditModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeAdminEditModal(); });
 $("#adminUserSearch").addEventListener("click", searchAdminUsers);
 $("#adminUserSearchInput").addEventListener("keydown", event => { if (event.key === "Enter") searchAdminUsers(); });
 $("#refreshAdminUsers").addEventListener("click", refreshAdminUsers);

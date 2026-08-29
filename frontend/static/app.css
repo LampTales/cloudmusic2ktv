@@ -368,7 +368,14 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .admin-role-label select { width: auto; min-height: 36px; }
 .admin-list { display: grid; gap: 8px; margin-top: 12px; }
 .admin-search-results {
-  max-height: 280px;
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 3px;
+}
+.admin-user-list {
+  max-height: 260px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -381,9 +388,21 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .admin-user-copy strong, .admin-user-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .admin-user-copy small { color: var(--muted); font-size: 10px; }
 .admin-role-badge { padding: 4px 8px; border: 1px solid transparent; border-radius: 999px; font-size: 10px; font-weight: 800; white-space: nowrap; }
-.admin-role-root { color: #6b3f00; background: #fff1cc; border-color: #e7c879; }
+.admin-role-root { color: var(--green); background: #e9f8f0; border-color: #a9dfc1; }
 .admin-role-admin { color: var(--red); background: var(--red-soft); border-color: #f3c7c7; }
 .admin-role-user { color: #333; background: #f4f4f4; border-color: #dcdcdc; }
+.admin-edit-panel { width: min(440px, calc(100vw - 32px)); }
+.admin-edit-modal { z-index: 110; }
+.admin-edit-identity { display: flex; align-items: center; gap: 12px; padding: 18px 0 6px; }
+.admin-edit-avatar { width: 48px; height: 48px; flex: 0 0 auto; border-radius: 50%; object-fit: cover; background: var(--line); }
+.admin-edit-identity > div:last-child { min-width: 0; display: grid; gap: 4px; }
+.admin-edit-identity strong, .admin-edit-identity small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-edit-identity small { color: var(--muted); font-size: 11px; }
+.admin-edit-hint { margin: 4px 0 15px; }
+.admin-edit-role-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
+.admin-edit-role-label select { width: 150px; }
+.admin-edit-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.admin-edit-actions button { min-width: 118px; }
 .admin-section-heading { display: flex; align-items: center; justify-content: space-between; }
 .admin-empty { margin: 14px 0 0; color: var(--muted); text-align: center; font-size: 12px; }
 .queue-detail-list { display: grid; gap: 10px; padding-top: 16px; }
@@ -495,6 +514,8 @@ button:disabled { opacity: .48; cursor: not-allowed; }
   .admin-user-copy { flex-basis: calc(100% - 56px); }
   .admin-user-row .admin-role-badge { margin-left: 46px; }
   .admin-user-row > button { margin-left: auto; }
+  .admin-search-results { max-height: 180px; }
+  .admin-user-list { max-height: 220px; }
   .modal-backdrop { align-items: end; padding: 0; }
   .modal-panel { width: 100%; max-height: min(88vh, 720px); padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); border-radius: 14px 14px 0 0; }
   .queue-detail-row { grid-template-columns: 42px minmax(0, 1fr); }
