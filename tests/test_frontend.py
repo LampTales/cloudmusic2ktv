@@ -118,3 +118,37 @@ def test_highlight_mode_is_primary_and_resolution_is_advanced():
     assert '<option value="sweep">匀速扫色</option>' in page
     assert 'const lyricHighlightMode = $("#lyricHighlightMode")?.value || "line"' in script
     assert "lyric_highlight_mode: lyricHighlightMode" in script
+
+
+def test_mobile_controls_use_two_columns_and_keep_action_labels_single_line():
+    css = (FRONTEND_ROOT / "static" / "app.css").read_text(encoding="utf-8")
+
+    assert ".material-prep { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);" in css
+    assert ".material-prep-copy { grid-column: 1 / -1; }" in css
+    assert ".option-grid { grid-template-columns: repeat(2, minmax(0, 1fr));" in css
+    assert ".search-row button { white-space: nowrap; }" in css
+    assert ".preview-actions button { flex: 0 0 auto; white-space: nowrap; }" in css
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'ready ? "重新下载" : "下载素材"' in script
+    assert 'setResponsiveButtonLabel($("#refreshPreview"), "更新预览", "更新")' in script
+    assert 'setResponsiveOptionLabel($("#lyricHighlightMode"), "line", "整句点亮（不扫色）", "整句点亮")' in script
+
+
+def test_preview_media_cannot_expand_builder_columns():
+    css = (FRONTEND_ROOT / "static" / "app.css").read_text(encoding="utf-8")
+
+    assert ".builder-layout { min-width: 0;" in css
+    assert ".preview-panel, .video-options { min-width: 0; }" in css
+    assert ".preview-stage { position: relative; min-width: 0;" in css
+    assert ".preview-stage img { display: none; width: 100%; max-width: 100%; min-width: 0;" in css
+    assert "#previewPlaceholder { display: grid; min-width: 0; max-width: 100%;" in css
+    assert ".preview-actions > span { min-width: 0;" in css
+    assert "white-space: normal;" in css
+    assert "-webkit-line-clamp: 2;" in css
+
+
+def test_mobile_recent_queue_keeps_song_text_and_video_action_visible():
+    css = (FRONTEND_ROOT / "static" / "app.css").read_text(encoding="utf-8")
+
+    assert ".queue-recent { justify-content: space-between; }" in css
+    assert ".queue-recent span { display: block; min-width: 0; flex: 1 1 auto; text-align: left; }" in css

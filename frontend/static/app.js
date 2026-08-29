@@ -102,8 +102,36 @@ function notify(message, error = false) {
 
 function busy(button, value, text = "处理中…") {
   if (!button.dataset.label) button.dataset.label = button.textContent;
+  button.dataset.busy = value ? "1" : "";
   button.disabled = value;
   button.textContent = value ? text : button.dataset.label;
+}
+
+function responsiveButtonLabel(desktop, mobile) {
+  return window.matchMedia("(max-width: 680px)").matches ? mobile : desktop;
+}
+
+function setResponsiveButtonLabel(button, desktop, mobile) {
+  if (!button) return;
+  button.dataset.label = responsiveButtonLabel(desktop, mobile);
+  if (button.dataset.busy !== "1") button.textContent = button.dataset.label;
+}
+
+function setResponsiveOptionLabel(select, value, desktop, mobile) {
+  if (!select) return;
+  const option = Array.from(select.options).find(item => item.value === value);
+  if (option) option.textContent = responsiveButtonLabel(desktop, mobile);
+}
+
+function updateResponsiveLabels() {
+  const ready = selectedSongLocal.ready;
+  setResponsiveButtonLabel(
+    $("#download"),
+    ready ? "重新下载素材" : "下载歌曲素材",
+    ready ? "重新下载" : "下载素材",
+  );
+  setResponsiveButtonLabel($("#refreshPreview"), "更新预览", "更新");
+  setResponsiveOptionLabel($("#lyricHighlightMode"), "line", "整句点亮（不扫色）", "整句点亮");
 }
 
 async function ensureCookieCsrf() {
@@ -476,7 +504,7 @@ function applyLocalStatus(local) {
   $("#builderMaterialTitle").textContent = selectedSongLocal.title || titles[selectedSongLocal.status] || "歌曲素材";
   $("#builderMaterialMessage").textContent = selectedSongLocal.message || "准备音频、封面和歌词时间轴";
   const download = $("#download");
-  download.textContent = selectedSongLocal.ready ? "重新下载素材" : "下载歌曲素材";
+  updateResponsiveLabels();
   download.classList.toggle("primary", !selectedSongLocal.ready);
   download.classList.toggle("secondary", selectedSongLocal.ready);
   download.disabled = selectedSongLocal.status === "downloading" || selectedSongLocal.status === "checking";
@@ -1142,6 +1170,8 @@ async function refreshVideoPreview(silent = false) {
 }
 
 $("#refreshPreview").addEventListener("click", () => refreshVideoPreview(false));
+updateResponsiveLabels();
+window.matchMedia("(max-width: 680px)").addEventListener?.("change", updateResponsiveLabels);
 
 for (const element of document.querySelectorAll("#videoBuilder select, #videoBuilder input:not([type=file])")) {
   const eventName = element.type === "range" || element.type === "color" ? "input" : "change";
