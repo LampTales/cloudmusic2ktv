@@ -240,7 +240,7 @@ def test_background_job_reports_completion(monkeypatch, tmp_path):
 
     monkeypatch.setattr(video_module, "render_video", fake_render)
     manager = VideoJobManager(tmp_path)
-    job = manager.start(1, VideoOptions(spectrum=False))
+    job = manager.start(1, VideoOptions(spectrum=False), project.song)
     deadline = time.time() + 2
     while time.time() < deadline and manager.get(job["id"])["status"] not in {"done", "error"}:
         time.sleep(0.01)
@@ -248,6 +248,10 @@ def test_background_job_reports_completion(monkeypatch, tmp_path):
     manager.executor.shutdown(wait=True)
     assert finished["status"] == "done"
     assert finished["progress"] == 100
+    completed = manager.queue_status()["completed"]
+    assert len(completed) == 1
+    assert completed[0]["id"] == job["id"]
+    assert completed[0]["song"]["album"] == project.song["album"]
 
 
 def test_queue_deduplicates_active_options_and_reports_waiting_count(monkeypatch, tmp_path):
@@ -288,6 +292,58 @@ def test_queue_deduplicates_active_options_and_reports_waiting_count(monkeypatch
     assert queue["queued"][0]["resolution"] == "720p"
     release.set()
     manager.executor.shutdown(wait=True)
+
+
+def test_queue_status_returns_latest_ten_completed_jobs(tmp_path):
+    manager = VideoJobManager(tmp_path)
+    for index in range(12):
+        manager.jobs[f"job-{index}"] = {
+            "id": f"job-{index}",
+            "song_id": index + 1,
+            "song": {"name": f"歌曲 {index}", "artist": "歌手", "album": "专辑", "cover_url": ""},
+            "resolution": "1080p",
+            "status": "done",
+            "progress": 100,
+            "message": "视频生成完成",
+            "result": None,
+            "error": None,
+            "created_at": index,
+            "started_at": index,
+            "finished_at": index,
+        }
+
+    completed = manager.queue_status()["completed"]
+    manager.executor.shutdown(wait=True)
+    assert [job["id"] for job in completed] == [f"job-{index}" for index in range(11, 1, -1)]
+
+
+def test_video_jobs_prune_terminal_history_on_load(tmp_path):
+    state_path = tmp_path / "video_jobs.json"
+    options = VideoOptions(spectrum=False).to_dict()
+    jobs = {}
+    for status in ("done", "error"):
+        for index in range(55):
+            job_id = f"{status}-{index}"
+            jobs[job_id] = {
+                "id": job_id,
+                "song_id": index + 1,
+                "options": options,
+                "status": status,
+                "created_at": index,
+                "finished_at": index,
+            }
+    state_path.write_text(json.dumps({"version": 1, "jobs": jobs}), encoding="utf-8")
+
+    manager = VideoJobManager(tmp_path / "outputs", state_path=state_path)
+    manager.executor.shutdown(wait=True)
+    remaining = manager.jobs
+    assert len([job for job in remaining.values() if job["status"] == "done"]) == 50
+    assert len([job for job in remaining.values() if job["status"] == "error"]) == 50
+    assert "done-0" not in remaining and "error-0" not in remaining
+    assert "done-54" in remaining and "error-54" in remaining
+
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert len(saved["jobs"]) == 100
 
 
 def test_video_jobs_resume_queued_work_after_manager_restart(monkeypatch, tmp_path):

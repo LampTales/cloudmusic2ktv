@@ -152,3 +152,15 @@ def test_mobile_recent_queue_keeps_song_text_and_video_action_visible():
 
     assert ".queue-recent { justify-content: space-between; }" in css
     assert ".queue-recent span { display: block; min-width: 0; flex: 1 1 auto; text-align: left; }" in css
+
+
+def test_queue_completed_view_is_scrollable_and_selectable():
+    css = (FRONTEND_ROOT / "static" / "app.css").read_text(encoding="utf-8")
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    html = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
+
+    assert "max-height: min(60vh, 520px)" in css
+    assert "queueWaitingTab" in html and "queueCompletedTab" in html
+    assert "completedTaskFilename" in script
+    assert "已选中完成任务，可继续播放、投屏或下载" in script
+    assert 'selectButton.textContent = "选择任务"' in script

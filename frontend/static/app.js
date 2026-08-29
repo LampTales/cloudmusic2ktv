@@ -11,7 +11,9 @@ let selectedSongVideos = [];
 let videoStatusRequest = 0;
 let lastQueueArtifactUrl = null;
 let queueTimer = null;
-let latestQueue = {current: null, queued: [], queued_count: 0, recent: null};
+let latestQueue = {current: null, queued: [], queued_count: 0, recent: null, completed: []};
+let queueDetailMode = "waiting";
+let preferredSelectedVideoFilename = "";
 let registerQrVerified = false;
 // The normal registration path is the SMS flow; Cookie import is an explicit
 // alternate method kept behind the underlined link in the form.
@@ -199,8 +201,9 @@ async function inspectSong(value, shouldScroll = true) {
   finally { busy(button, false); }
 }
 
-function showSong(song, local = null, shouldScroll = true) {
+function showSong(song, local = null, shouldScroll = true, preferredVideoFilename = "") {
   selectedSong = {...song};
+  preferredSelectedVideoFilename = String(preferredVideoFilename || "");
   localStorage.setItem("cloudmusic2ktv.selectedSongId", String(song.id));
   $("#songInput").value = song.id;
   $("#cover").src = song.cover_url;
@@ -239,7 +242,9 @@ async function refreshSelectedVideoStatus() {
   const requestNumber = ++videoStatusRequest;
   try {
     const data = await api(`/api/video/local/${encodeURIComponent(songId)}`, {headers: {}});
-    if (requestNumber === videoStatusRequest && selectedSong?.id === songId) applyCastStatus(data.local);
+    if (requestNumber === videoStatusRequest && selectedSong?.id === songId) {
+      applyCastStatus(data.local, preferredSelectedVideoFilename);
+    }
   } catch (error) {
     if (requestNumber === videoStatusRequest && selectedSong?.id === songId) {
       applyCastStatus({status: "error", ready: false, message: error.message, videos: []});
@@ -247,7 +252,7 @@ async function refreshSelectedVideoStatus() {
   }
 }
 
-function applyCastStatus(local) {
+function applyCastStatus(local, preferredVideoFilename = "") {
   selectedSongVideos = Array.isArray(local?.videos) ? local.videos : [];
   const ready = Boolean(local?.ready && selectedSongVideos.length);
   const summary = $("#videoSummaryStatus");
@@ -267,6 +272,9 @@ function applyCastStatus(local) {
     option.value = video.filename;
     option.textContent = `${video.resolution} · ${formatFileSize(video.size)} · ${formatUpdatedAt(video.updated_at)}`;
     select.append(option);
+  }
+  if (preferredVideoFilename && selectedSongVideos.some(video => video.filename === preferredVideoFilename)) {
+    select.value = preferredVideoFilename;
   }
   updateCastDirectLink();
 }
@@ -1298,8 +1306,10 @@ function stopQueuePolling() {
 }
 
 function clearQueueView() {
-  latestQueue = {current: null, queued: [], queued_count: 0, recent: null};
+  latestQueue = {current: null, queued: [], queued_count: 0, recent: null, completed: []};
+  queueDetailMode = "waiting";
   $("#queueCount").textContent = "等待 0";
+  updateQueueViewButtons();
   $("#queueIdle strong").textContent = "登录后查看生成队列";
   $("#queueIdle span:not(.dock-mark)").textContent = "网站账号登录后会显示任务进度";
   $("#queueIdle").classList.remove("hidden");
@@ -1330,7 +1340,8 @@ async function refreshQueue() {
 }
 
 function showQueue(queue) {
-  latestQueue = queue;
+  latestQueue = {...queue, completed: Array.isArray(queue.completed) ? queue.completed : []};
+  updateQueueViewButtons();
   const current = queue.current;
   $("#queueCount").textContent = `等待 ${queue.queued_count || 0}`;
   $("#queueIdle strong").textContent = "当前没有生成任务";
@@ -1371,11 +1382,12 @@ function showQueue(queue) {
     : `最近失败：${name} — ${artist} · ${latest.resolution} · ${latest.error || "未知错误"}`;
   recent.append(label);
   if (latest.status === "done" && latest.result?.url) {
-    const link = document.createElement("a");
-    link.href = resolveBackendUrl(latest.result.url);
-    link.target = "_blank";
-    link.textContent = "打开视频";
-    recent.append(link);
+    const selectButton = document.createElement("button");
+    selectButton.type = "button";
+    selectButton.className = "queue-recent-select";
+    selectButton.textContent = "选择任务";
+    selectButton.addEventListener("click", () => selectCompletedTask(latest));
+    recent.append(selectButton);
   }
   recent.classList.toggle("hidden", Boolean(current));
   if (!$("#queueModal").classList.contains("hidden")) renderQueueDetails();
@@ -1385,17 +1397,28 @@ function renderQueueDetails() {
   const list = $("#queueDetailList");
   list.replaceChildren();
   const jobs = [];
-  if (latestQueue.current) jobs.push({job: latestQueue.current, state: "正在生成"});
-  for (const job of latestQueue.queued || []) jobs.push({job, state: `等待第 ${job.position} 位`});
+  if (queueDetailMode === "completed") {
+    for (const job of latestQueue.completed || []) {
+      jobs.push({job, state: `已完成 · ${formatUpdatedAt(job.finished_at)}`, completed: true});
+    }
+  } else {
+    if (latestQueue.current) jobs.push({job: latestQueue.current, state: "正在生成"});
+    for (const job of latestQueue.queued || []) jobs.push({job, state: `等待第 ${job.position} 位`});
+  }
   if (!jobs.length) {
     const empty = document.createElement("p");
     empty.className = "queue-detail-empty";
-    empty.textContent = "当前没有正在生成或等待的任务";
+    empty.textContent = queueDetailMode === "completed" ? "还没有已完成的视频任务" : "当前没有正在生成或等待的任务";
     list.append(empty);
     return;
   }
-  for (const {job, state} of jobs) {
-    const row = document.createElement("article"); row.className = "queue-detail-row";
+  for (const {job, state, completed} of jobs) {
+    const row = document.createElement(completed ? "button" : "article");
+    row.className = `queue-detail-row${completed ? " queue-completed-row" : ""}`;
+    if (completed) {
+      row.type = "button";
+      row.addEventListener("click", () => selectCompletedTask(job));
+    }
     if (job.song?.cover_url) {
       const image = document.createElement("img"); image.src = job.song.cover_url; image.alt = "";
       row.append(image);
@@ -1407,6 +1430,47 @@ function renderQueueDetails() {
     const badge = document.createElement("span"); badge.className = "queue-detail-state"; badge.textContent = state;
     row.append(copy, badge); list.append(row);
   }
+}
+
+function updateQueueViewButtons() {
+  const waiting = $("#queueWaitingTab");
+  const completed = $("#queueCompletedTab");
+  if (!waiting || !completed) return;
+  const completedCount = (latestQueue.completed || []).length;
+  completed.textContent = `最近完成${completedCount ? ` (${completedCount})` : ""}`;
+  waiting.classList.toggle("active", queueDetailMode === "waiting");
+  completed.classList.toggle("active", queueDetailMode === "completed");
+  waiting.setAttribute("aria-selected", String(queueDetailMode === "waiting"));
+  completed.setAttribute("aria-selected", String(queueDetailMode === "completed"));
+}
+
+function setQueueDetailMode(mode) {
+  queueDetailMode = mode === "completed" ? "completed" : "waiting";
+  updateQueueViewButtons();
+  renderQueueDetails();
+}
+
+function completedTaskFilename(job) {
+  const result = job?.result || {};
+  const value = String(result.path || result.url || "").split("?")[0];
+  const normalized = value.replace(/\\/g, "/");
+  return normalized.slice(normalized.lastIndexOf("/") + 1);
+}
+
+function selectCompletedTask(job) {
+  const songId = Number(job?.song_id);
+  if (!Number.isInteger(songId) || songId <= 0) return notify("任务歌曲信息无效", true);
+  const source = job.song || {};
+  const song = {
+    id: songId,
+    name: String(source.name || `歌曲 ${songId}`),
+    artist: String(source.artist || "未知歌手"),
+    album: String(source.album || "本地生成任务"),
+    cover_url: String(source.cover_url || ""),
+  };
+  showSong(song, null, true, completedTaskFilename(job));
+  closeQueueModal();
+  notify("已选中完成任务，可继续播放、投屏或下载");
 }
 
 function openQueueModal() {
@@ -1423,6 +1487,8 @@ function closeQueueModal() {
 }
 
 $("#queueCount").addEventListener("click", openQueueModal);
+$("#queueWaitingTab").addEventListener("click", () => setQueueDetailMode("waiting"));
+$("#queueCompletedTab").addEventListener("click", () => setQueueDetailMode("completed"));
 $("#castVideoSelect").addEventListener("change", updateCastDirectLink);
 $("#openCastApp").addEventListener("click", openCastApp);
 $("#browserCast").addEventListener("click", tryBrowserCast);

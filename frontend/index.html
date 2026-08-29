@@ -432,6 +432,10 @@
         <div><p class="eyebrow">RENDER QUEUE</p><h2 id="queueModalTitle">生成队列</h2></div>
         <button id="closeQueueModal" class="text-action modal-close" type="button" aria-label="关闭队列详情">关闭</button>
       </div>
+      <div class="queue-view-switch" role="tablist" aria-label="队列视图">
+        <button id="queueWaitingTab" class="queue-view-button active" type="button" role="tab" aria-selected="true">等待任务</button>
+        <button id="queueCompletedTab" class="queue-view-button" type="button" role="tab" aria-selected="false">最近完成</button>
+      </div>
       <div id="queueDetailList" class="queue-detail-list"></div>
     </div>
   </div>

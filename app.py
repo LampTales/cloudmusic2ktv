@@ -692,6 +692,9 @@ def video_queue() -> Any:
     queue = video_jobs.queue_status()
     if queue.get("recent"):
         queue["recent"] = job_with_artifact_url(queue["recent"])
+    queue["completed"] = [
+        job_with_artifact_url(job) for job in (queue.get("completed") or [])
+    ]
     return jsonify({"ok": True, "queue": queue})
 
 

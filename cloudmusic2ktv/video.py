@@ -789,6 +789,9 @@ class VideoJobManager:
     while keeping the rendering implementation and deployment lightweight.
     """
 
+    DONE_JOB_LIMIT = 50
+    ERROR_JOB_LIMIT = 50
+
     def __init__(self, output_root: Path, state_path: Path | None = None):
         self.output_root = Path(output_root)
         self.state_path = Path(state_path) if state_path is not None else self.output_root / ".video_jobs.json"
@@ -817,6 +820,7 @@ class VideoJobManager:
                 "song": {
                     "name": str((song or {}).get("name") or ""),
                     "artist": str((song or {}).get("artist") or ""),
+                    "album": str((song or {}).get("album") or ""),
                     "cover_url": str((song or {}).get("cover_url") or ""),
                 },
                 "resolution": options.resolution,
@@ -867,11 +871,20 @@ class VideoJobManager:
                 ),
                 None,
             )
+            completed = sorted(
+                (job for job in self.jobs.values() if job["status"] == "done"),
+                key=lambda job: (
+                    self._timestamp_value(job.get("finished_at")),
+                    self._timestamp_value(job.get("created_at")),
+                ),
+                reverse=True,
+            )[:10]
             return {
                 "current": self._public_job(current) if current else None,
                 "queued_count": len(waiting_jobs),
                 "queued": queued,
                 "recent": self._public_job(recent) if recent else None,
+                "completed": [self._public_job(job) for job in completed],
             }
 
     def _run(self, job_id: str, song_id: int, options: VideoOptions) -> None:
@@ -915,6 +928,7 @@ class VideoJobManager:
             if job is None:
                 return
             job.update(values)
+            self._prune_terminal_jobs_locked()
             self._save_state_locked()
 
     def _position_locked(self, job_id: str) -> int:
@@ -926,6 +940,38 @@ class VideoJobManager:
                 return position
             position += 1
         return 0
+
+    @staticmethod
+    def _timestamp_value(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _prune_terminal_jobs_locked(self) -> bool:
+        changed = False
+        for status, limit in (
+            ("done", self.DONE_JOB_LIMIT),
+            ("error", self.ERROR_JOB_LIMIT),
+        ):
+            terminal = [
+                (job_id, job)
+                for job_id, job in self.jobs.items()
+                if job.get("status") == status
+            ]
+            if len(terminal) <= limit:
+                continue
+            terminal.sort(
+                key=lambda item: (
+                    self._timestamp_value(item[1].get("finished_at")),
+                    self._timestamp_value(item[1].get("created_at")),
+                ),
+                reverse=True,
+            )
+            for job_id, _ in terminal[limit:]:
+                del self.jobs[job_id]
+                changed = True
+        return changed
 
     @staticmethod
     def _public_job(job: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -954,6 +1000,8 @@ class VideoJobManager:
                 job["message"] = "服务重启后恢复排队"
                 job["started_at"] = None
             self.jobs[job_id] = job
+        if self._prune_terminal_jobs_locked():
+            self._save_state_locked()
 
     def _resume_active_jobs(self) -> None:
         for job_id, job in list(self.jobs.items()):
