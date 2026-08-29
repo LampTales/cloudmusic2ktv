@@ -174,7 +174,7 @@ async function refreshStatus() {
     $("#loggedOut").classList.toggle("hidden", data.logged_in);
     $("#loggedIn").classList.toggle("hidden", !data.logged_in);
     if (!data.logged_in) $("#neteaseReauthForm").classList.add("hidden");
-    $("#manageAllowlist").classList.toggle("hidden", !data.logged_in || accountRole !== "admin");
+    $("#manageAllowlist").classList.toggle("hidden", !data.logged_in || !["root", "admin"].includes(accountRole));
     if (data.logged_in) {
       $("#nickname").textContent = `${data.profile.username || data.profile.nickname} · ${data.profile.nickname || ""}`;
       $("#avatar").src = data.profile.avatarUrl || "";
@@ -562,7 +562,7 @@ function openAccountModal() {
   $("#loggedIn").classList.toggle("hidden", !accountLoggedIn);
   $("#accountModal").classList.remove("hidden");
   document.body.classList.add("modal-open");
-  $(accountRole === "admin" ? "#manageAllowlist" : accountLoggedIn ? "#logout" : "#websiteUsername").focus();
+  $(["root", "admin"].includes(accountRole) ? "#manageAllowlist" : accountLoggedIn ? "#logout" : "#websiteUsername").focus();
 }
 
 function closeAccountModal() {
@@ -697,9 +697,10 @@ async function checkNeteaseCookieStatus(button) {
 }
 
 function openAdminModal() {
-  if (accountRole !== "admin") return notify("只有管理员可以管理允许名单", true);
+  if (!["root", "admin"].includes(accountRole)) return notify("只有管理员可以管理允许名单", true);
   $("#adminModal").classList.remove("hidden");
   document.body.classList.add("modal-open");
+  configureAdminRolePicker();
   refreshAdminUsers();
   $("#adminUserSearchInput").focus();
 }
@@ -729,17 +730,41 @@ function renderAdminUserRow(user, removable) {
   row.append(copy);
   const badge = document.createElement("span");
   const isAdmin = user.role === "admin";
-  badge.className = `admin-role-badge ${isAdmin ? "admin-role-admin" : "admin-role-user"}`;
-  badge.textContent = isAdmin ? "管理" : "用户";
+  const roleClass = user.role === "root" ? "admin-role-root" : isAdmin ? "admin-role-admin" : "admin-role-user";
+  badge.className = `admin-role-badge ${roleClass}`;
+  badge.textContent = user.role === "root" ? "Root" : isAdmin ? "管理" : "用户";
   row.append(badge);
-  if (removable && user.role !== "admin") {
+  const canDelete = removable && user.role !== "root" &&
+    (accountRole === "root" || (accountRole === "admin" && user.role === "user"));
+  if (canDelete) {
     const remove = document.createElement("button");
     remove.className = "secondary compact";
-    remove.textContent = "删除";
+    remove.textContent = "移除";
     remove.addEventListener("click", () => deleteAdminUser(user.userId, remove));
     row.append(remove);
   }
+  if (removable && accountRole === "root" && user.role !== "root") {
+    const role = document.createElement("select");
+    role.className = "admin-role-select";
+    role.innerHTML = '<option value="user">用户</option><option value="admin">管理</option>';
+    role.value = user.role === "admin" ? "admin" : "user";
+    const save = document.createElement("button");
+    save.className = "secondary compact";
+    save.textContent = "保存权限";
+    save.addEventListener("click", () => updateAdminUserRole(user.userId, role.value, save));
+    row.append(role, save);
+  }
   return row;
+}
+
+function configureAdminRolePicker() {
+  const picker = $("#adminUserRole");
+  const adminOption = picker?.querySelector('option[value="admin"]');
+  if (!picker || !adminOption) return;
+  const isRoot = accountRole === "root";
+  adminOption.hidden = !isRoot;
+  adminOption.disabled = !isRoot;
+  if (!isRoot) picker.value = "user";
 }
 
 async function refreshAdminUsers() {
@@ -798,8 +823,21 @@ async function addAdminUser(user, button) {
   finally { busy(button, false); }
 }
 
+async function updateAdminUserRole(userId, role, button) {
+  busy(button, true, "保存中…");
+  try {
+    await api(`/api/admin/users/${encodeURIComponent(userId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({role}),
+    });
+    notify("用户权限已更新");
+    await refreshAdminUsers();
+  } catch (error) { notify(error.message, true); }
+  finally { busy(button, false); }
+}
+
 async function deleteAdminUser(userId, button) {
-  if (!window.confirm("确定要从允许名单删除这个普通用户吗？")) return;
+  if (!window.confirm("确定要从允许名单移除这个用户吗？")) return;
   busy(button, true, "删除中…");
   try {
     await api(`/api/admin/users/${encodeURIComponent(userId)}`, {method: "DELETE"});

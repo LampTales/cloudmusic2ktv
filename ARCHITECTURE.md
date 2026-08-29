@@ -102,7 +102,11 @@ Content-Range、Content-Length 和 Content-Disposition，并设置受控的
 
 管理员接口：
 
-- 读取、搜索、添加和删除允许名单成员。
+- `root` 为首个成功注册账号自动获得的不可转让所有者角色；只能通过后端直接编辑 JSON 改变；
+- `root` 可添加管理员和普通用户、在两者之间调整权限，并移除非 root 账号；
+- `admin` 只能添加和移除普通用户；
+- `root` 账号不可通过 API 添加、降级或删除；
+- 读取、搜索允许名单对 `root` 和 `admin` 开放。
 
 所有错误返回 JSON。Flask 的 HTTPException 保持原状态；未知根路径和静态路径返回 404。
 
@@ -221,6 +225,7 @@ docker compose config
 - 只有受控代理才能设置 `CLOUDMUSIC2KTV_TRUST_PROXY=1`；
 - Cookie 导入只允许 HTTPS 或显式本地调试例外；
 - 当前允许名单成员共享 outputs 和全局队列，没有按用户隔离；
+- 移除允许名单成员只撤销访问权限，保留 `accounts.json` 和 `netease_bindings.json` 中的可恢复记录；
 - 普通 artifact URL 要求网站会话；投屏使用后端签发的短期 HMAC 签名 URL，设备无需携带网站 Cookie，过期后失效；
 - 前端开发代理使用 Flask，仅用于开发；生产使用 Nginx 镜像；
 - 后端 JSON 存储适合可信、低流量、单实例部署，不是多节点数据库。

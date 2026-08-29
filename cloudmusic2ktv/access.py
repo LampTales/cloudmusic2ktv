@@ -8,7 +8,8 @@ from typing import Any
 
 
 ALLOWLIST_VERSION = 1
-VALID_ROLES = {"admin", "user"}
+VALID_ROLES = {"root", "admin", "user"}
+MANAGED_ROLES = {"admin", "user"}
 
 
 class AllowlistError(RuntimeError):
@@ -59,9 +60,11 @@ class AllowlistStore:
                 return str(existing["role"])
             if users:
                 raise UserNotAllowed("该网易云账号不在允许名单中")
-            users[user_id] = self._entry(profile, "admin", user_id)
+            # The first successful registration bootstraps the sole elevated
+            # account.  Root cannot be created through the normal admin API.
+            users[user_id] = self._entry(profile, "root", user_id)
             self._write(value)
-            return "admin"
+            return "root"
 
     def add(
         self,
@@ -70,7 +73,7 @@ class AllowlistStore:
         *,
         added_by: str,
     ) -> dict[str, Any]:
-        if role not in VALID_ROLES:
+        if role not in MANAGED_ROLES:
             raise AllowlistError("无效的权限等级")
         user_id = self._normalize_user_id(profile.get("userId"))
         if user_id is None:
@@ -100,10 +103,42 @@ class AllowlistStore:
             entry = users.get(target)
             if not isinstance(entry, dict):
                 raise AllowlistError("名单中没有该用户")
-            if entry.get("role") == "admin":
-                raise AllowlistError("不能删除管理员账号")
+            if entry.get("role") == "root":
+                raise AllowlistError("不能删除 root 账号")
             del users[target]
             self._write(value)
+
+    def set_role(self, user_id: Any, role: str, *, actor_id: str) -> dict[str, Any]:
+        """Change an existing managed account between admin and user.
+
+        Root is intentionally immutable through the API.  The caller's role
+        is checked at the HTTP layer; this store still rejects root targets
+        and root assignments so a future caller cannot accidentally create a
+        transferable owner role.
+        """
+        target = self._normalize_user_id(user_id)
+        actor = self._normalize_user_id(actor_id)
+        if target is None or actor is None:
+            raise AllowlistError("用户 ID 无效")
+        if role not in MANAGED_ROLES:
+            raise AllowlistError("只能在管理员和普通用户之间调整权限")
+        with self._lock:
+            value = self._read()
+            users = value["users"]
+            entry = users.get(target)
+            if not isinstance(entry, dict):
+                raise AllowlistError("名单中没有该用户")
+            if entry.get("role") == "root":
+                raise AllowlistError("不能调整 root 账号的权限")
+            entry = dict(entry)
+            entry["role"] = role
+            entry["role_updated_at"] = int(time.time())
+            entry["role_updated_by"] = actor
+            users[target] = entry
+            self._write(value)
+            result = dict(entry)
+            result["userId"] = target
+            return result
 
     def _read(self) -> dict[str, Any]:
         if not self.path.exists():

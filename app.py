@@ -104,7 +104,7 @@ def add_cors_headers(response: Any) -> Any:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Range"
-        response.headers["Access-Control-Allow-Methods"] = "GET, HEAD, POST, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = "GET, HEAD, POST, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Expose-Headers"] = (
             "Accept-Ranges, Content-Length, Content-Range, Content-Disposition"
         )
@@ -147,7 +147,7 @@ def authorized_identity(*, admin: bool = False) -> tuple[dict[str, Any] | None, 
         response, status_code = error_response("该账号已不在允许名单中", "not_allowed", 403)
         response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
         return None, (response, status_code)
-    if admin and role != "admin":
+    if admin and role not in {"root", "admin"}:
         return None, error_response("只有管理员可以执行此操作", "admin_required", 403)
     profile["role"] = role
     return profile, None
@@ -790,6 +790,8 @@ def admin_add_user() -> Any:
     role = str(body.get("role") or "user").strip()
     if not user_id.isdigit() or int(user_id) <= 0:
         return error_response("用户 ID 无效", "invalid_user_id", 400)
+    if g.current_user["role"] != "root" and role != "user":
+        return error_response("管理员只能添加普通用户", "admin_scope_forbidden", 403)
     # The search response already contains the profile fields needed by the
     # allowlist.  NetEase's legacy user-detail endpoint is no longer available,
     # so do not make a second upstream request here.
@@ -807,9 +809,33 @@ def admin_add_user() -> Any:
     return jsonify({"ok": True, "user": entry})
 
 
+@app.patch("/api/admin/users/<user_id>")
+@admin_required
+def admin_update_user_role(user_id: str) -> Any:
+    if g.current_user["role"] != "root":
+        return error_response("只有 root 可以调整用户权限", "root_required", 403)
+    body = json_body()
+    role = str(body.get("role") or "").strip()
+    entry = allowlist.set_role(
+        user_id,
+        role,
+        actor_id=str(g.current_user["netease_user_id"]),
+    )
+    return jsonify({"ok": True, "user": entry})
+
+
 @app.delete("/api/admin/users/<user_id>")
 @admin_required
 def admin_delete_user(user_id: str) -> Any:
+    normalized_id = str(user_id or "").strip()
+    if not normalized_id.isdigit() or int(normalized_id) <= 0:
+        return error_response("用户 ID 无效", "invalid_user_id", 400)
+    if g.current_user["role"] != "root":
+        target_role = allowlist.role_for(normalized_id)
+        if target_role is None:
+            return error_response("名单中没有该用户", "allowlist_error", 400)
+        if target_role != "user":
+            return error_response("管理员只能删除普通用户", "admin_scope_forbidden", 403)
     allowlist.delete(user_id, actor_id=str(g.current_user["netease_user_id"]))
     return jsonify({"ok": True, "message": "已从允许名单删除"})
 

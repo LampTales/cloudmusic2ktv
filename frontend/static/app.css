@@ -381,6 +381,7 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .admin-user-copy strong, .admin-user-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .admin-user-copy small { color: var(--muted); font-size: 10px; }
 .admin-role-badge { padding: 4px 8px; border: 1px solid transparent; border-radius: 999px; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.admin-role-root { color: #6b3f00; background: #fff1cc; border-color: #e7c879; }
 .admin-role-admin { color: var(--red); background: var(--red-soft); border-color: #f3c7c7; }
 .admin-role-user { color: #333; background: #f4f4f4; border-color: #dcdcdc; }
 .admin-section-heading { display: flex; align-items: center; justify-content: space-between; }

@@ -51,8 +51,8 @@ def test_empty_allowlist_bootstraps_first_successful_login(monkeypatch, tmp_path
 
     assert response.status_code == 200
     assert users.snapshot()[0]["userId"] == "101"
-    assert users.snapshot()[0]["role"] == "admin"
-    assert response.get_json()["role"] == "admin"
+    assert users.snapshot()[0]["role"] == "root"
+    assert response.get_json()["role"] == "root"
 
 
 def test_non_listed_login_is_rejected_and_does_not_leave_a_session(monkeypatch, tmp_path):
@@ -135,6 +135,89 @@ def test_regular_member_cannot_access_admin_routes(monkeypatch, tmp_path):
     response = client.get("/api/admin/users")
     assert response.status_code == 403
     assert response.get_json()["error"]["code"] == "admin_required"
+
+
+def test_root_can_manage_admins_and_change_managed_roles(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="1", role="root")
+
+    added_admin = client.post(
+        "/api/admin/users",
+        json={
+            "userId": "202",
+            "role": "admin",
+            "profile": {"userId": 202, "nickname": "待添加管理员", "avatarUrl": ""},
+        },
+    )
+    assert added_admin.status_code == 200
+    assert added_admin.get_json()["user"]["role"] == "admin"
+
+    changed = client.patch("/api/admin/users/202", json={"role": "user"})
+    assert changed.status_code == 200
+    assert changed.get_json()["user"]["role"] == "user"
+
+    promoted = client.patch("/api/admin/users/202", json={"role": "admin"})
+    assert promoted.status_code == 200
+    assert promoted.get_json()["user"]["role"] == "admin"
+
+    removed = client.delete("/api/admin/users/202")
+    assert removed.status_code == 200
+    assert web_app.allowlist.role_for("202") is None
+
+
+def test_root_cannot_create_or_modify_or_delete_root(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="1", role="root")
+
+    add_root = client.post(
+        "/api/admin/users",
+        json={
+            "userId": "202",
+            "role": "root",
+            "profile": {"userId": 202, "nickname": "非法 Root", "avatarUrl": ""},
+        },
+    )
+    assert add_root.status_code == 400
+
+    update_root = client.patch("/api/admin/users/1", json={"role": "user"})
+    assert update_root.status_code == 400
+
+    delete_root = client.delete("/api/admin/users/1")
+    assert delete_root.status_code == 400
+
+
+def test_admin_can_only_add_and_delete_regular_users(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2", role="admin")
+
+    add_admin = client.post(
+        "/api/admin/users",
+        json={
+            "userId": "303",
+            "role": "admin",
+            "profile": {"userId": 303, "nickname": "越权管理员", "avatarUrl": ""},
+        },
+    )
+    assert add_admin.status_code == 403
+    assert add_admin.get_json()["error"]["code"] == "admin_scope_forbidden"
+
+    add_user = client.post(
+        "/api/admin/users",
+        json={
+            "userId": "303",
+            "role": "user",
+            "profile": {"userId": 303, "nickname": "普通用户", "avatarUrl": ""},
+        },
+    )
+    assert add_user.status_code == 200
+
+    update_user = client.patch("/api/admin/users/303", json={"role": "admin"})
+    assert update_user.status_code == 403
+    assert update_user.get_json()["error"]["code"] == "root_required"
+
+    delete_admin = client.delete("/api/admin/users/1")
+    assert delete_admin.status_code == 403
+    assert delete_admin.get_json()["error"]["code"] == "admin_scope_forbidden"
+
+    delete_user = client.delete("/api/admin/users/303")
+    assert delete_user.status_code == 200
 
 
 def test_admin_user_search_uses_the_bound_client(monkeypatch, tmp_path):
@@ -276,7 +359,7 @@ def test_cookie_registration_verifies_account_before_binding(monkeypatch, tmp_pa
     )
 
     assert response.status_code == 200
-    assert users.role_for(101) == "admin"
+    assert users.role_for(101) == "root"
     assert accounts.authenticate("alice", "password")["netease_user_id"] == "101"
     stored = bindings.load("101")
     assert stored is not None
