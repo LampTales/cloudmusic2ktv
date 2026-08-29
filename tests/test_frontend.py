@@ -164,3 +164,13 @@ def test_queue_completed_view_is_scrollable_and_selectable():
     assert "completedTaskFilename" in script
     assert "已选中完成任务，可继续播放、投屏或下载" in script
     assert 'selectButton.textContent = "选择任务"' in script
+
+
+def test_queue_polling_is_adaptive_and_pauses_when_hidden():
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "const QUEUE_ACTIVE_POLL_MS = 1500" in script
+    assert "const QUEUE_IDLE_POLL_MS = 15000" in script
+    assert "QUEUE_ERROR_MAX_POLL_MS = 30000" in script
+    assert "document.addEventListener(\"visibilitychange\", queueVisibilityChanged)" in script
+    assert "error?.status === 401 || error?.status === 403" in script

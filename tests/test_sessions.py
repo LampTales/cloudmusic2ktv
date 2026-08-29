@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 
 from cloudmusic2ktv.sessions import FileSessionStore
 
@@ -36,6 +37,18 @@ def test_expired_session_is_rejected_lazily(tmp_path):
     with store.open(token) as expired:
         assert expired is None
     assert not path.exists()
+
+
+def test_read_only_session_does_not_write_back(tmp_path):
+    store = FileSessionStore(tmp_path, ttl_seconds=3600)
+    with store.open(None, create=True) as session:
+        assert session is not None
+        token = session.token
+
+    with patch.object(store, "_write", wraps=store._write) as write:
+        with store.open(token, touch=False, persist=False) as session:
+            assert session is not None
+        write.assert_not_called()
 
 
 def test_cleanup_removes_invalid_and_expired_session_files(tmp_path):

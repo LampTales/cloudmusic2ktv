@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 import app as web_app
@@ -112,6 +113,15 @@ def test_global_queue_status_requires_a_listed_member():
     response = web_app.app.test_client().get("/api/video/queue")
     assert response.status_code == 401
     assert response.get_json()["error"]["code"] == "login_required"
+
+
+def test_global_queue_status_does_not_persist_session(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path)
+    sessions = web_app.auth_sessions
+    with patch.object(sessions, "_write", wraps=sessions._write) as write:
+        response = client.get("/api/video/queue")
+    assert response.status_code == 200
+    write.assert_not_called()
 
 
 def test_local_video_status_lists_only_shareable_generated_mp4(monkeypatch, tmp_path):

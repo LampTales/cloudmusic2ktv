@@ -134,9 +134,11 @@ cookie_import_last_attempt: dict[str, float] = {}
 auth_sessions.cleanup_expired()
 
 
-def authorized_identity(*, admin: bool = False) -> tuple[dict[str, Any] | None, Any | None]:
+def authorized_identity(
+    *, admin: bool = False, touch: bool = True, persist: bool = True
+) -> tuple[dict[str, Any] | None, Any | None]:
     token = auth_token()
-    with auth_sessions.open(token, touch=True) as session:
+    with auth_sessions.open(token, touch=touch, persist=persist) as session:
         if session is None or not session.profile:
             return None, error_response("请先登录网站账号", "login_required", 401)
         profile = dict(session.profile)
@@ -157,6 +159,20 @@ def member_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         identity, failure = authorized_identity()
+        if failure is not None:
+            return failure
+        g.current_user = identity
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def read_only_member_required(view):
+    """Authenticate a read-only member request without rewriting its session."""
+
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        identity, failure = authorized_identity(touch=False, persist=False)
         if failure is not None:
             return failure
         g.current_user = identity
@@ -687,7 +703,7 @@ def video_render() -> Any:
 
 
 @app.get("/api/video/queue")
-@member_required
+@read_only_member_required
 def video_queue() -> Any:
     queue = video_jobs.queue_status()
     if queue.get("recent"):

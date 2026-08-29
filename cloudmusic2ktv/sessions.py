@@ -42,7 +42,12 @@ class FileSessionStore:
 
     @contextmanager
     def open(
-        self, token: str | None, *, create: bool = False, touch: bool = True
+        self,
+        token: str | None,
+        *,
+        create: bool = False,
+        touch: bool = True,
+        persist: bool = True,
     ) -> Iterator[AuthSession | None]:
         resolved = self._valid_token(token)
         record = None
@@ -100,19 +105,20 @@ class FileSessionStore:
                     client.session.cookies.clear()
                 raise
             finally:
-                now = int(time.time())
-                self._write(
-                    resolved,
-                    {
-                        "version": SESSION_VERSION,
-                        "created_at": session.created_at,
-                        "last_used_at": now if touch else session.last_used_at,
-                        "profile": session.profile,
-                        "pending_qr": session.pending_qr,
-                        "csrf_token": session.csrf_token,
-                        "cookies": client.export_cookies(),
-                    },
-                )
+                if persist:
+                    now = int(time.time())
+                    self._write(
+                        resolved,
+                        {
+                            "version": SESSION_VERSION,
+                            "created_at": session.created_at,
+                            "last_used_at": now if touch else session.last_used_at,
+                            "profile": session.profile,
+                            "pending_qr": session.pending_qr,
+                            "csrf_token": session.csrf_token,
+                            "cookies": client.export_cookies(),
+                        },
+                    )
         finally:
             lock.release()
 

@@ -1,4 +1,8 @@
 const $ = (selector) => document.querySelector(selector);
+const QUEUE_ACTIVE_POLL_MS = 1500;
+const QUEUE_IDLE_POLL_MS = 15000;
+const QUEUE_ERROR_INITIAL_POLL_MS = 5000;
+const QUEUE_ERROR_MAX_POLL_MS = 30000;
 let selectedSong = null;
 let toastTimer = null;
 let previewTimer = null;
@@ -14,6 +18,8 @@ let queueTimer = null;
 let latestQueue = {current: null, queued: [], queued_count: 0, recent: null, completed: []};
 let queueDetailMode = "waiting";
 let preferredSelectedVideoFilename = "";
+let queuePollGeneration = 0;
+let queueFailureCount = 0;
 let registerQrVerified = false;
 // The normal registration path is the SMS flow; Cookie import is an explicit
 // alternate method kept behind the underlined link in the form.
@@ -1303,6 +1309,7 @@ $("#renderVideo").addEventListener("click", async (event) => {
 function stopQueuePolling() {
   clearTimeout(queueTimer);
   queueTimer = null;
+  queuePollGeneration += 1;
 }
 
 function clearQueueView() {
@@ -1320,24 +1327,63 @@ function clearQueueView() {
 
 async function refreshQueue() {
   stopQueuePolling();
-  if (!accountLoggedIn) {
-    clearQueueView();
+  const generation = queuePollGeneration;
+  if (!accountLoggedIn || document.hidden) {
+    if (!accountLoggedIn) {
+      clearQueueView();
+    }
     return;
   }
   try {
     const data = await api("/api/video/queue", {headers: {}});
+    if (generation !== queuePollGeneration || document.hidden) return;
+    queueFailureCount = 0;
     showQueue(data.queue);
-  } catch {
+  } catch (error) {
+    if (generation !== queuePollGeneration) return;
+    if (error?.status === 401 || error?.status === 403) {
+      accountLoggedIn = false;
+      stopQueuePolling();
+      clearQueueView();
+      notify("登录已过期，请重新登录", true);
+      refreshStatus();
+      return;
+    }
+    queueFailureCount += 1;
     $("#queueIdle strong").textContent = "暂时无法取得队列状态";
-    $("#queueIdle span:not(.dock-mark)").textContent = "请检查服务是否正常运行";
+    $("#queueIdle span:not(.dock-mark)").textContent = "服务恢复后会自动重试";
     $("#queueIdle").classList.remove("hidden");
     $("#queueCurrent").classList.add("hidden");
     $("#queueRecent").classList.add("hidden");
     $("#queueProgressFill").style.width = "0%";
   } finally {
-    if (accountLoggedIn) queueTimer = setTimeout(refreshQueue, 1500);
+    if (accountLoggedIn && generation === queuePollGeneration && !document.hidden) {
+      const delay = queueFailureCount
+        ? Math.min(QUEUE_ERROR_MAX_POLL_MS, QUEUE_ERROR_INITIAL_POLL_MS * (2 ** (queueFailureCount - 1)))
+        : latestQueue.current || Number(latestQueue.queued_count || 0) > 0
+          ? QUEUE_ACTIVE_POLL_MS
+          : QUEUE_IDLE_POLL_MS;
+      queueTimer = setTimeout(refreshQueue, delay);
+    }
   }
 }
+
+function queueVisibilityChanged() {
+  if (document.hidden) {
+    stopQueuePolling();
+    return;
+  }
+  if (accountLoggedIn) {
+    queueFailureCount = 0;
+    refreshQueue();
+  }
+}
+
+/*
+ * Queue polling is deliberately adaptive: progress needs a short interval,
+ * while an idle page should not keep rewriting auth/session state forever.
+ */
+document.addEventListener("visibilitychange", queueVisibilityChanged);
 
 function showQueue(queue) {
   latestQueue = {...queue, completed: Array.isArray(queue.completed) ? queue.completed : []};
