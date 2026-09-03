@@ -15,6 +15,21 @@ def test_netease_client_does_not_inherit_environment_proxies_by_default():
     assert NeteaseClient(trust_env_proxy=True).session.trust_env is True
 
 
+def test_twice_used_phone_confirmation_uses_the_current_weapi_session(monkeypatch):
+    client = NeteaseClient()
+    calls = []
+
+    def fake_weapi(path, payload, **kwargs):
+        calls.append((path, payload, kwargs))
+        return {"code": 200, "profile": {"userId": 101}}
+
+    monkeypatch.setattr(client, "weapi", fake_weapi)
+    result = client.confirm_twice_used_phone()
+
+    assert result["code"] == 200
+    assert calls == [("/weapi/login/cellphone/twice/used/confirm", {}, {})]
+
+
 def test_imported_cookie_records_are_first_party_and_name_deduplicated():
     result = normalize_cookie_records(
         [

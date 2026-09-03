@@ -94,6 +94,19 @@ def test_login_uses_password_manager_form_semantics():
     assert 'id="searchInput" name="song-search" type="search"' in page
 
 
+def test_rare_netease_identity_confirmation_has_an_isolated_modal():
+    page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="identityConfirmationModal"' in page
+    assert 'id="confirmIdentityConfirmation"' in page
+    assert 'id="cancelIdentityConfirmation"' in page
+    assert 'error.code === "netease_identity_confirmation_required"' in script
+    assert 'payload.identity_confirmation = true' in script
+    assert '"/api/auth/identity-confirmation/confirm"' in script
+    assert '"/api/auth/identity-confirmation/cancel"' in script
+
+
 def test_system_share_payload_contains_only_the_video_url():
     script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
 

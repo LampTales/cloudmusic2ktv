@@ -30,6 +30,8 @@ let qrExpireTimer = null;
 let qrFlowId = 0;
 let ydDeviceTokenPromise = null;
 let adminEditUser = null;
+let pendingIdentityConfirmationPurpose = null;
+let verifiedIdentityConfirmationPurpose = null;
 const API_ORIGIN = String(window.CLOUDMUSIC2KTV_API_ORIGIN || "").replace(/\/+$/, "");
 const APP_BASE_PATH = String(
   window.CLOUDMUSIC2KTV_BASE_PATH || inferBasePath()
@@ -590,11 +592,56 @@ function closeAccountModal() {
   $("#accountPill").focus();
 }
 
+function openIdentityConfirmation(purpose) {
+  pendingIdentityConfirmationPurpose = purpose;
+  verifiedIdentityConfirmationPurpose = null;
+  $("#identityConfirmationModal").classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  $("#confirmIdentityConfirmation").focus();
+}
+
+function closeIdentityConfirmation() {
+  $("#identityConfirmationModal").classList.add("hidden");
+  pendingIdentityConfirmationPurpose = null;
+}
+
+async function cancelIdentityConfirmation() {
+  verifiedIdentityConfirmationPurpose = null;
+  closeIdentityConfirmation();
+  try {
+    await api("/api/auth/identity-confirmation/cancel", {method: "POST", body: "{}"});
+  } catch {
+    // Cancellation is intentionally silent; the server-side state expires.
+  }
+}
+
+async function confirmIdentityConfirmation(button) {
+  const purpose = pendingIdentityConfirmationPurpose;
+  if (!purpose) return;
+  busy(button, true, "确认中…");
+  try {
+    const result = await api("/api/auth/identity-confirmation/confirm", {
+      method: "POST",
+      body: "{}",
+    });
+    if (result.purpose !== purpose) throw new Error("账号确认状态不一致，请重新验证");
+    verifiedIdentityConfirmationPurpose = purpose;
+    closeIdentityConfirmation();
+    if (purpose === "register") await submitWebsiteRegistration();
+    else if (purpose === "reauth") await submitNeteaseReauthentication();
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    busy(button, false);
+  }
+}
+
 function setWebsiteAuthMode(mode) {
   const register = mode === "register";
   stopQrPolling();
   registerUsingLegacy = register;
   registerQrVerified = false;
+  verifiedIdentityConfirmationPurpose = null;
   $("#smsRegisterFields").classList.remove("hidden");
   $("#startQrRegister").classList.remove("hidden");
   $("#qrRegisterPanel").classList.add("hidden");
@@ -911,6 +958,11 @@ $("#searchModeId").addEventListener("click", () => setFinderMode("id"));
 $("#accountPill").addEventListener("click", openAccountModal);
 $("#closeAccountModal").addEventListener("click", closeAccountModal);
 $("#accountModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeAccountModal(); });
+$("#cancelIdentityConfirmation").addEventListener("click", cancelIdentityConfirmation);
+$("#confirmIdentityConfirmation").addEventListener("click", event => confirmIdentityConfirmation(event.currentTarget));
+$("#identityConfirmationModal").addEventListener("click", event => {
+  if (event.target === event.currentTarget) cancelIdentityConfirmation();
+});
 $("#manageAllowlist").addEventListener("click", openAdminModal);
 $("#closeAdminModal").addEventListener("click", closeAdminModal);
 $("#adminModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeAdminModal(); });
@@ -988,8 +1040,7 @@ $("#websiteLoginForm").addEventListener("submit", async (event) => {
   finally { busy(button, false); }
 });
 
-$("#websiteRegisterForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
+async function submitWebsiteRegistration() {
   const button = $("#register");
   busy(button, true, "创建中…");
   let cookieSubmitted = false;
@@ -998,7 +1049,9 @@ $("#websiteRegisterForm").addEventListener("submit", async (event) => {
       username: $("#registerUsername").value,
       password: $("#registerPassword").value,
     };
-    if (!registerUsingLegacy && !registerQrVerified) {
+    if (verifiedIdentityConfirmationPurpose === "register") {
+      payload.identity_confirmation = true;
+    } else if (!registerUsingLegacy && !registerQrVerified) {
       payload.cookies = await readCookieInput("#registerCookieFile", "#registerCookieText");
       payload.csrf_token = await ensureCookieCsrf();
       cookieSubmitted = true;
@@ -1014,14 +1067,26 @@ $("#websiteRegisterForm").addEventListener("submit", async (event) => {
     $("#phone").value = "";
     $("#captcha").value = "";
     clearCookieInput("#registerCookieFile", "#registerCookieText");
+    verifiedIdentityConfirmationPurpose = null;
     notify("网站账号创建成功");
     await refreshStatus();
     closeAccountModal();
-  } catch (error) { notify(error.message, true); }
+  } catch (error) {
+    if (error.code === "netease_identity_confirmation_required") {
+      openIdentityConfirmation("register");
+    } else {
+      notify(error.message, true);
+    }
+  }
   finally {
     if (cookieSubmitted) clearCookieInput("#registerCookieFile", "#registerCookieText");
     busy(button, false);
   }
+}
+
+$("#websiteRegisterForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await submitWebsiteRegistration();
 });
 
 $("#reauthNetease").addEventListener("click", openNeteaseReauth);
@@ -1095,21 +1160,35 @@ $("#sendReauthCaptcha").addEventListener("click", async (event) => {
   finally { busy(button, false); }
 });
 
-$("#reauthNeteaseSubmit").addEventListener("click", async (event) => {
-  const button = event.currentTarget;
+async function submitNeteaseReauthentication() {
+  const button = $("#reauthNeteaseSubmit");
   busy(button, true, "验证中…");
   try {
+    const payload = verifiedIdentityConfirmationPurpose === "reauth"
+      ? {identity_confirmation: true}
+      : {phone: $("#reauthPhone").value, captcha: $("#reauthCaptcha").value, country_code: $("#reauthCountryCode").value};
     await api("/api/auth/reauth", {
       method: "POST",
-      body: JSON.stringify({phone: $("#reauthPhone").value, captcha: $("#reauthCaptcha").value, country_code: $("#reauthCountryCode").value}),
+      body: JSON.stringify(payload),
     });
+    verifiedIdentityConfirmationPurpose = null;
     notify("网易云绑定已更新");
     $("#reauthPhone").value = "";
     $("#reauthCaptcha").value = "";
     closeNeteaseReauth();
     await refreshStatus();
-  } catch (error) { notify(error.message, true); }
+  } catch (error) {
+    if (error.code === "netease_identity_confirmation_required") {
+      openIdentityConfirmation("reauth");
+    } else {
+      notify(error.message, true);
+    }
+  }
   finally { busy(button, false); }
+}
+
+$("#reauthNeteaseSubmit").addEventListener("click", async () => {
+  await submitNeteaseReauthentication();
 });
 
 $("#logout").addEventListener("click", async (event) => {
@@ -1542,7 +1621,8 @@ $("#downloadCastVideo").addEventListener("click", downloadCastVideo);
 $("#closeQueueModal").addEventListener("click", closeQueueModal);
 $("#queueModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeQueueModal(); });
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && !$("#queueModal").classList.contains("hidden")) closeQueueModal();
+  if (event.key === "Escape" && !$("#identityConfirmationModal").classList.contains("hidden")) cancelIdentityConfirmation();
+  else if (event.key === "Escape" && !$("#queueModal").classList.contains("hidden")) closeQueueModal();
   else if (event.key === "Escape" && !$("#adminModal").classList.contains("hidden")) closeAdminModal();
   else if (event.key === "Escape" && !$("#accountModal").classList.contains("hidden")) closeAccountModal();
 });

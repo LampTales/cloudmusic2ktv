@@ -321,6 +321,11 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.58); }
 .modal-panel { width: min(640px, 100%); max-height: calc(100vh - 40px); overflow: auto; padding: 24px; background: white; border-radius: 12px; box-shadow: 0 25px 80px rgba(0,0,0,.28); }
 .account-modal-panel { width: min(480px, 100%); }
+.identity-confirmation-modal { z-index: 110; }
+.identity-confirmation-panel { width: min(440px, 100%); }
+.identity-confirmation-hint { margin: 0; }
+.identity-confirmation-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.identity-confirmation-actions button { min-width: 112px; }
 .modal-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 17px; border-bottom: 1px solid var(--line); }
 .modal-heading h2 { font-size: 22px; }
 .modal-close { flex: 0 0 auto; }

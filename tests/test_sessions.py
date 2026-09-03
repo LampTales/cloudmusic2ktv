@@ -10,6 +10,11 @@ def test_file_session_keeps_cookies_server_side_and_reloads_them(tmp_path):
         assert session is not None
         token = session.token
         session.profile = {"userId": 1, "nickname": "测试用户", "avatarUrl": ""}
+        session.pending_identity_confirmation = {
+            "purpose": "register",
+            "status": "waiting",
+            "created_at": 123,
+        }
         session.client.session.cookies.set("MUSIC_U", "secret", domain=".music.163.com", path="/")
 
     files = list(tmp_path.glob("*.json"))
@@ -20,6 +25,7 @@ def test_file_session_keeps_cookies_server_side_and_reloads_them(tmp_path):
     with store.open(token) as restored:
         assert restored is not None
         assert restored.profile["nickname"] == "测试用户"
+        assert restored.pending_identity_confirmation["purpose"] == "register"
         assert restored.client.session.cookies.get("MUSIC_U") == "secret"
 
 

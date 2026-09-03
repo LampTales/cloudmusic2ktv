@@ -381,6 +381,20 @@
     </div>
   </div>
 
+  <div id="identityConfirmationModal" class="modal-backdrop identity-confirmation-modal hidden" role="dialog" aria-modal="true" aria-labelledby="identityConfirmationTitle">
+    <div class="modal-panel identity-confirmation-panel">
+      <div class="modal-heading">
+        <div><p class="eyebrow">NETEASE CONFIRMATION</p><h2 id="identityConfirmationTitle">确认网易云账号</h2></div>
+      </div>
+      <p class="modal-lede">网易云提示当前手机号可能是运营商重新投放的号码。请确认页面所示的网易云账号确实属于你本人。</p>
+      <p class="helper-text identity-confirmation-hint">确认后将继续刚才的验证流程；取消不会创建、绑定或更改任何网站账号。</p>
+      <div class="identity-confirmation-actions">
+        <button id="cancelIdentityConfirmation" class="secondary" type="button">取消</button>
+        <button id="confirmIdentityConfirmation" class="primary" type="button">确认是本人</button>
+      </div>
+    </div>
+  </div>
+
   <div id="adminModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="adminModalTitle">
     <div class="modal-panel account-modal-panel">
       <div class="modal-heading">

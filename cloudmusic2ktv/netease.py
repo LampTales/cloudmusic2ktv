@@ -105,6 +105,18 @@ class NeteaseClient:
         self._save_cookies()
         return data
 
+    def confirm_twice_used_phone(self) -> dict[str, Any]:
+        """Confirm that a recycled-phone warning refers to the current user.
+
+        NetEase returns code 8860 from the cellphone login flow when it wants
+        this extra acknowledgement.  The confirmation must use the same
+        session (and therefore the same cookies) as that login attempt.
+        """
+        data = self.weapi("/weapi/login/cellphone/twice/used/confirm", {})
+        self._require_code(data)
+        self._save_cookies()
+        return data
+
     def qr_login_start(self, *, user_agent: str = "") -> dict[str, str]:
         """Create a QR login challenge using the current web login API."""
         headers = {"x-loginmethod": "QrCode"}

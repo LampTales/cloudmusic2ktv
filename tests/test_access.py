@@ -44,6 +44,13 @@ def test_empty_allowlist_bootstraps_first_successful_login(monkeypatch, tmp_path
             "profile": {"userId": 101, "nickname": "首位用户", "avatarUrl": ""},
         },
     )
+    monkeypatch.setattr(
+        NeteaseClient,
+        "confirm_twice_used_phone",
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("normal registration must not use identity confirmation")
+        ),
+    )
     response = web_app.app.test_client().post(
         "/api/auth/register",
         json={"username": "alice", "password": "password", "phone": "1", "captcha": "2", "country_code": "86"},
@@ -53,6 +60,157 @@ def test_empty_allowlist_bootstraps_first_successful_login(monkeypatch, tmp_path
     assert users.snapshot()[0]["userId"] == "101"
     assert users.snapshot()[0]["role"] == "root"
     assert response.get_json()["role"] == "root"
+
+
+def test_existing_qr_registration_does_not_use_identity_confirmation(monkeypatch, tmp_path):
+    sessions = FileSessionStore(tmp_path / "sessions")
+    users = AllowlistStore(tmp_path / "allowlist.json")
+    accounts = WebsiteAccountStore(tmp_path / "accounts.json")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    monkeypatch.setattr(web_app, "auth_sessions", sessions)
+    monkeypatch.setattr(web_app, "allowlist", users)
+    monkeypatch.setattr(web_app, "website_accounts", accounts)
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+    monkeypatch.setattr(
+        NeteaseClient,
+        "confirm_twice_used_phone",
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("QR registration must not use identity confirmation")
+        ),
+    )
+
+    with sessions.open(None, create=True) as session:
+        token = session.token
+        session.pending_qr = {
+            "purpose": "register",
+            "status": "verified",
+            "profile": {"userId": 101, "nickname": "扫码用户", "avatarUrl": ""},
+        }
+        session.client.session.cookies.set(
+            "MUSIC_U", "qr-login", domain=".music.163.com", path="/"
+        )
+
+    client = web_app.app.test_client()
+    set_session_cookie(client, token)
+    response = client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password", "qr": True},
+    )
+
+    assert response.status_code == 200
+    assert users.role_for(101) == "root"
+    assert accounts.authenticate("alice", "password")["netease_user_id"] == "101"
+    assert bindings.load("101") is not None
+
+
+def test_registration_continues_after_twice_used_phone_confirmation(monkeypatch, tmp_path):
+    sessions = FileSessionStore(tmp_path / "sessions")
+    users = AllowlistStore(tmp_path / "allowlist.json")
+    accounts = WebsiteAccountStore(tmp_path / "accounts.json")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    monkeypatch.setattr(web_app, "auth_sessions", sessions)
+    monkeypatch.setattr(web_app, "allowlist", users)
+    monkeypatch.setattr(web_app, "website_accounts", accounts)
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+
+    def require_confirmation(self, phone, captcha, country_code="86"):
+        self.session.cookies.set("MUSIC_U", "pending-login", domain=".music.163.com", path="/")
+        raise NeteaseError("请确认是否是你本人", code=8860)
+
+    def confirm_identity(self):
+        assert self.session.cookies.get("MUSIC_U") == "pending-login"
+        return {
+            "code": 200,
+            "profile": {"userId": 101, "nickname": "首位用户", "avatarUrl": ""},
+        }
+
+    monkeypatch.setattr(NeteaseClient, "login_with_captcha", require_confirmation)
+    monkeypatch.setattr(NeteaseClient, "confirm_twice_used_phone", confirm_identity)
+    client = web_app.app.test_client()
+
+    started = client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password", "phone": "1", "captcha": "2"},
+    )
+    assert started.status_code == 409
+    assert started.get_json()["error"]["code"] == "netease_identity_confirmation_required"
+    assert "cloudmusic2ktv_session=" in started.headers["Set-Cookie"]
+
+    confirmed = client.post("/api/auth/identity-confirmation/confirm", json={})
+    assert confirmed.status_code == 200
+    assert confirmed.get_json()["purpose"] == "register"
+
+    completed = client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password", "identity_confirmation": True},
+    )
+    assert completed.status_code == 200
+    assert users.role_for(101) == "root"
+    assert accounts.authenticate("alice", "password")["netease_user_id"] == "101"
+    assert bindings.load("101") is not None
+
+
+def test_cancelled_twice_used_phone_confirmation_does_not_register(monkeypatch, tmp_path):
+    sessions = FileSessionStore(tmp_path / "sessions")
+    accounts = WebsiteAccountStore(tmp_path / "accounts.json")
+    monkeypatch.setattr(web_app, "auth_sessions", sessions)
+    monkeypatch.setattr(web_app, "allowlist", AllowlistStore(tmp_path / "allowlist.json"))
+    monkeypatch.setattr(web_app, "website_accounts", accounts)
+    monkeypatch.setattr(web_app, "netease_bindings", NeteaseBindingStore(tmp_path / "bindings.json"))
+
+    def require_confirmation(self, phone, captcha, country_code="86"):
+        self.session.cookies.set("MUSIC_U", "pending-login", domain=".music.163.com", path="/")
+        raise NeteaseError("请确认是否是你本人", code=8860)
+
+    monkeypatch.setattr(NeteaseClient, "login_with_captcha", require_confirmation)
+    client = web_app.app.test_client()
+    started = client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password", "phone": "1", "captcha": "2"},
+    )
+    assert started.status_code == 409
+
+    cancelled = client.post("/api/auth/identity-confirmation/cancel", json={})
+    assert cancelled.status_code == 200
+    missing = client.post("/api/auth/identity-confirmation/confirm", json={})
+    assert missing.status_code == 400
+    assert missing.get_json()["error"]["code"] == "identity_confirmation_missing"
+    assert accounts.authenticate("alice", "password") is None
+
+
+def test_reauthentication_continues_after_twice_used_phone_confirmation(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+
+    def require_confirmation(self, phone, captcha, country_code="86"):
+        self.session.cookies.set("MUSIC_U", "renewed-login", domain=".music.163.com", path="/")
+        raise NeteaseError("请确认是否是你本人", code=8860)
+
+    monkeypatch.setattr(NeteaseClient, "login_with_captcha", require_confirmation)
+    monkeypatch.setattr(
+        NeteaseClient,
+        "confirm_twice_used_phone",
+        lambda self: {
+            "code": 200,
+            "profile": {"userId": 2, "nickname": "测试用户", "avatarUrl": ""},
+        },
+    )
+
+    started = client.post(
+        "/api/auth/reauth",
+        json={"phone": "1", "captcha": "2", "country_code": "86"},
+    )
+    assert started.status_code == 409
+    assert started.get_json()["error"]["code"] == "netease_identity_confirmation_required"
+    assert client.post("/api/auth/identity-confirmation/confirm", json={}).status_code == 200
+
+    completed = client.post(
+        "/api/auth/reauth",
+        json={"identity_confirmation": True},
+    )
+    assert completed.status_code == 200
+    assert bindings.load("2") is not None
 
 
 def test_non_listed_login_is_rejected_and_does_not_leave_a_session(monkeypatch, tmp_path):
