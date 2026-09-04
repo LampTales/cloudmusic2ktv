@@ -104,6 +104,32 @@ def test_playlist_page_has_a_separate_navigation_view():
     assert "setApplicationView(\"workbench\", \"songPreview\", false)" in script
 
 
+def test_playlist_state_is_isolated_between_website_accounts():
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    reset = script.split("function resetPlaylistState", 1)[1].split(
+        "function accountPlaylistKey", 1
+    )[0]
+    status = script.split("async function refreshStatus", 1)[1].split(
+        "async function inspectSong", 1
+    )[0]
+    logout = script.split('$("#logout").addEventListener', 1)[1].split(
+        '$("#inspect").addEventListener', 1
+    )[0]
+
+    assert "let playlistAccountKey = null" in script
+    assert "let playlistListRequest = 0" in script
+    assert "playlistListRequest += 1" in reset
+    assert "playlistTrackRequest += 1" in reset
+    assert "playlistsCache = []" in reset
+    assert "selectedPlaylistId = null" in reset
+    assert '$("#playlistDetailContent").classList.add("hidden")' in reset
+    assert "nextPlaylistAccountKey !== playlistAccountKey" in status
+    assert "if (requestNumber !== playlistListRequest) return" in script
+    assert "playlistAccountKey = null" in logout
+    assert "resetPlaylistState()" in logout
+    assert script.count("await refreshAfterNeteaseReauthentication()") == 3
+
+
 def test_login_uses_password_manager_form_semantics():
     page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
 

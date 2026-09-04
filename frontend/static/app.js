@@ -33,6 +33,8 @@ let adminEditUser = null;
 let pendingIdentityConfirmationPurpose = null;
 let verifiedIdentityConfirmationPurpose = null;
 let playlistsCache = [];
+let playlistAccountKey = null;
+let playlistListRequest = 0;
 let selectedPlaylistId = null;
 let playlistTrackOffset = 0;
 const PLAYLIST_TRACK_PAGE_SIZE = 50;
@@ -180,9 +182,61 @@ function clearCookieInput(fileSelector, textSelector) {
   $(textSelector).value = "";
 }
 
+function resetPlaylistState(message = "登录后查看歌单") {
+  playlistListRequest += 1;
+  playlistTrackRequest += 1;
+  clearTimeout(playlistTrackSearchTimer);
+  playlistsCache = [];
+  selectedPlaylistId = null;
+  playlistTrackOffset = 0;
+  playlistTrackQuery = "";
+
+  $("#playlistSearch").value = "";
+  $("#playlistTrackSearch").value = "";
+  $("#playlistCount").textContent = "";
+  const placeholder = document.createElement("p");
+  placeholder.className = "playlist-loading";
+  placeholder.textContent = message;
+  $("#playlistList").replaceChildren(placeholder);
+
+  $("#playlistLayout").classList.remove("is-detail");
+  $("#playlistBack").classList.add("hidden");
+  $("#playlistDetailContent").classList.add("hidden");
+  $("#playlistDetailEmpty").classList.remove("hidden");
+  $("#playlistCover").removeAttribute("src");
+  $("#playlistName").textContent = "";
+  $("#playlistMeta").textContent = "";
+  $("#playlistDescription").textContent = "";
+  $("#playlistTracksMeta").textContent = "";
+  $("#playlistTracks").replaceChildren();
+  $("#playlistPageMeta").textContent = "";
+  $("#playlistPrev").disabled = true;
+  $("#playlistNext").disabled = true;
+}
+
+function accountPlaylistKey(status) {
+  if (!status.logged_in) return null;
+  const profile = status.profile || {};
+  return `${profile.username || ""}:${profile.netease_user_id || ""}`;
+}
+
+async function refreshAfterNeteaseReauthentication() {
+  resetPlaylistState("正在读取歌单…");
+  await refreshStatus();
+  if (accountLoggedIn && !$("#playlists").classList.contains("hidden")) {
+    await loadPlaylists();
+  }
+}
+
 async function refreshStatus() {
   try {
     const data = await api("/api/status");
+    const nextPlaylistAccountKey = accountPlaylistKey(data);
+    const playlistAccountChanged = nextPlaylistAccountKey !== playlistAccountKey;
+    if (playlistAccountChanged) {
+      resetPlaylistState(data.logged_in ? "正在读取歌单…" : "登录后查看歌单");
+      playlistAccountKey = nextPlaylistAccountKey;
+    }
     accountLoggedIn = data.logged_in;
     accountRole = data.role || null;
     neteaseBound = Boolean(data.netease_bound);
@@ -203,6 +257,9 @@ async function refreshStatus() {
       clearQueueView();
     }
     updateRenderAvailability();
+    if (playlistAccountChanged && data.logged_in && !$("#playlists").classList.contains("hidden")) {
+      await loadPlaylists();
+    }
   } catch (error) { notify(error.message, true); }
 }
 
@@ -1019,20 +1076,24 @@ async function loadPlaylists(force = false) {
     renderPlaylistList();
     return;
   }
+  const requestNumber = ++playlistListRequest;
   const list = $("#playlistList");
   list.innerHTML = '<p class="playlist-loading">正在读取歌单…</p>';
   try {
     const data = force
       ? await api("/api/playlists/refresh", {method: "POST", body: "{}"})
       : await api("/api/playlists", {headers: {}});
+    if (requestNumber !== playlistListRequest) return;
     playlistsCache = Array.isArray(data.playlists) ? data.playlists : [];
     renderPlaylistList();
     if (selectedPlaylistId) {
       const selected = playlistsCache.find(item => item.id === selectedPlaylistId);
       if (selected) await selectPlaylist(selected, false);
     }
+    if (requestNumber !== playlistListRequest) return;
     if (!playlistsCache.length) list.innerHTML = '<p class="playlist-loading">暂无歌单</p>';
   } catch (error) {
+    if (requestNumber !== playlistListRequest) return;
     list.innerHTML = `<p class="playlist-error">${escapeHtml(error.message)}</p>`;
   }
 }
@@ -1338,7 +1399,7 @@ $("#reauthCookieSubmit").addEventListener("click", async (event) => {
     clearCookieInput("#reauthCookieFile", "#reauthCookieText");
     notify("网易云账号已重新验证");
     closeNeteaseReauth();
-    await refreshStatus();
+    await refreshAfterNeteaseReauthentication();
   } catch (error) { notify(error.message, true); }
   finally {
     if (cookieSubmitted) clearCookieInput("#reauthCookieFile", "#reauthCookieText");
@@ -1356,7 +1417,7 @@ $("#startQrReauth").addEventListener("click", async (event) => {
       $("#smsReauthFields").classList.add("hidden");
       notify("网易云账号已重新验证");
       closeNeteaseReauth();
-      await refreshStatus();
+      await refreshAfterNeteaseReauthentication();
     },
   });
 });
@@ -1394,7 +1455,7 @@ async function submitNeteaseReauthentication() {
     $("#reauthPhone").value = "";
     $("#reauthCaptcha").value = "";
     closeNeteaseReauth();
-    await refreshStatus();
+    await refreshAfterNeteaseReauthentication();
   } catch (error) {
     if (error.code === "netease_identity_confirmation_required") {
       openIdentityConfirmation("reauth");
@@ -1412,7 +1473,13 @@ $("#reauthNeteaseSubmit").addEventListener("click", async () => {
 $("#logout").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   busy(button, true);
-  try { await api("/api/auth/logout", {method: "POST", body: "{}"}); notify("已退出登录"); await refreshStatus(); }
+  try {
+    await api("/api/auth/logout", {method: "POST", body: "{}"});
+    playlistAccountKey = null;
+    resetPlaylistState();
+    notify("已退出登录");
+    await refreshStatus();
+  }
   catch (error) { notify(error.message, true); }
   finally { busy(button, false); }
 });
