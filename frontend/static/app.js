@@ -1022,7 +1022,9 @@ async function loadPlaylists(force = false) {
   const list = $("#playlistList");
   list.innerHTML = '<p class="playlist-loading">正在读取歌单…</p>';
   try {
-    const data = await api("/api/playlists", {headers: {}});
+    const data = force
+      ? await api("/api/playlists/refresh", {method: "POST", body: "{}"})
+      : await api("/api/playlists", {headers: {}});
     playlistsCache = Array.isArray(data.playlists) ? data.playlists : [];
     renderPlaylistList();
     if (selectedPlaylistId) {
@@ -1334,7 +1336,7 @@ $("#reauthCookieSubmit").addEventListener("click", async (event) => {
       body: JSON.stringify({cookies, csrf_token}),
     });
     clearCookieInput("#reauthCookieFile", "#reauthCookieText");
-    notify("网易云绑定已更新");
+    notify("网易云账号已重新验证");
     closeNeteaseReauth();
     await refreshStatus();
   } catch (error) { notify(error.message, true); }
@@ -1352,7 +1354,7 @@ $("#startQrReauth").addEventListener("click", async (event) => {
     button: event.currentTarget,
     onVerified: async () => {
       $("#smsReauthFields").classList.add("hidden");
-      notify("网易云绑定已更新");
+      notify("网易云账号已重新验证");
       closeNeteaseReauth();
       await refreshStatus();
     },
@@ -1388,7 +1390,7 @@ async function submitNeteaseReauthentication() {
       body: JSON.stringify(payload),
     });
     verifiedIdentityConfirmationPurpose = null;
-    notify("网易云绑定已更新");
+    notify("网易云账号已重新验证");
     $("#reauthPhone").value = "";
     $("#reauthCaptcha").value = "";
     closeNeteaseReauth();

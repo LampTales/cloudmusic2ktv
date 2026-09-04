@@ -266,11 +266,40 @@ class NeteaseClient:
         ``/api/v6/playlist/detail`` returns the complete ordered ``trackIds``
         but only a small ``tracks`` preview.  Resolve the requested IDs via
         ``/api/v3/song/detail`` in batches; the upstream endpoint accepts at
-        most 1000 IDs, while this client deliberately uses a smaller page.
+        most 1000 IDs.
         """
         offset = max(0, int(offset))
         limit = max(1, min(int(limit), 100))
         query = str(query or "").strip()
+        playlist, track_ids = self.playlist_track_ids(playlist_id)
+        if query:
+            candidates = self.songs_by_ids(track_ids)
+            terms = [term.casefold() for term in query.split() if term]
+
+            def matches(song: dict[str, Any]) -> bool:
+                searchable = " ".join(
+                    str(song.get(field) or "") for field in ("name", "artist", "album")
+                ).casefold()
+                return all(term in searchable for term in terms)
+
+            filtered = [song for song in candidates if matches(song)]
+            total = len(filtered)
+            songs = filtered[offset : offset + limit]
+        else:
+            total = len(track_ids)
+            songs = self.songs_by_ids(track_ids[offset : offset + limit])
+        return {
+            "playlist": playlist,
+            "songs": songs,
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "has_more": offset + limit < total,
+            "query": query,
+        }
+
+    def playlist_track_ids(self, playlist_id: int) -> tuple[dict[str, Any], list[int]]:
+        """Return normalized playlist metadata and its complete ordered track IDs."""
         detail = self._post_json(
             "/api/v6/playlist/detail",
             data={"id": str(playlist_id), "n": "100000", "s": "8"},
@@ -284,37 +313,14 @@ class NeteaseClient:
             for item in (playlist.get("trackIds") or [])
             if isinstance(item, dict) and str(item.get("id") or "").isdigit()
         ]
-        if query:
-            candidates: list[dict[str, Any]] = []
-            for start in range(0, len(track_ids), 1000):
-                candidates.extend(self._songs_by_ids(track_ids[start : start + 1000]))
-            terms = [term.casefold() for term in query.split() if term]
+        return normalize_playlist(playlist), track_ids
 
-            def matches(song: dict[str, Any]) -> bool:
-                searchable = " ".join(
-                    str(song.get(field) or "") for field in ("name", "artist", "album")
-                ).casefold()
-                return all(term in searchable for term in terms)
-
-            filtered = [
-                song
-                for song in candidates
-                if matches(song)
-            ]
-            total = len(filtered)
-            songs = filtered[offset : offset + limit]
-        else:
-            total = len(track_ids)
-            songs = self._songs_by_ids(track_ids[offset : offset + limit])
-        return {
-            "playlist": normalize_playlist(playlist),
-            "songs": songs,
-            "offset": offset,
-            "limit": limit,
-            "total": total,
-            "has_more": offset + limit < total,
-            "query": query,
-        }
+    def songs_by_ids(self, song_ids: list[int]) -> list[dict[str, Any]]:
+        """Resolve ordered song IDs in upstream-safe batches."""
+        songs: list[dict[str, Any]] = []
+        for start in range(0, len(song_ids), 1000):
+            songs.extend(self._songs_by_ids(song_ids[start : start + 1000]))
+        return songs
 
     def _songs_by_ids(self, song_ids: list[int]) -> list[dict[str, Any]]:
         if not song_ids:

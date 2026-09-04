@@ -3,6 +3,7 @@ import app as web_app
 from cloudmusic2ktv.access import AllowlistStore
 from cloudmusic2ktv.accounts import NeteaseBindingStore, WebsiteAccountStore
 from cloudmusic2ktv.netease import NeteaseClient, NeteaseError
+from cloudmusic2ktv.playlist_cache import PlaylistCache
 from cloudmusic2ktv.sessions import FileSessionStore
 from tests.helpers import set_session_cookie
 
@@ -24,6 +25,7 @@ def member_client(monkeypatch, tmp_path, *, user_id="2", role="user"):
         session.profile = profile
     monkeypatch.setattr(web_app, "auth_sessions", sessions)
     monkeypatch.setattr(web_app, "allowlist", users)
+    monkeypatch.setattr(web_app, "playlist_cache", PlaylistCache())
     client = web_app.app.test_client()
     set_session_cookie(client, token)
     return client
@@ -182,6 +184,13 @@ def test_reauthentication_continues_after_twice_used_phone_confirmation(monkeypa
     client = member_client(monkeypatch, tmp_path, user_id="2")
     bindings = NeteaseBindingStore(tmp_path / "bindings.json")
     monkeypatch.setattr(web_app, "netease_bindings", bindings)
+    cache_loads = []
+
+    def load_cached_playlists():
+        cache_loads.append(True)
+        return [{"id": len(cache_loads)}]
+
+    assert web_app.playlist_cache.get_playlists("2", load_cached_playlists)[0]["id"] == 1
 
     def require_confirmation(self, phone, captcha, country_code="86"):
         self.session.cookies.set("MUSIC_U", "renewed-login", domain=".music.163.com", path="/")
@@ -211,6 +220,7 @@ def test_reauthentication_continues_after_twice_used_phone_confirmation(monkeypa
     )
     assert completed.status_code == 200
     assert bindings.load("2") is not None
+    assert web_app.playlist_cache.get_playlists("2", load_cached_playlists)[0]["id"] == 2
 
 
 def test_non_listed_login_is_rejected_and_does_not_leave_a_session(monkeypatch, tmp_path):
@@ -464,16 +474,13 @@ def test_member_can_read_bound_playlists_and_tracks(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         NeteaseClient,
-        "playlist_tracks",
-        lambda self, playlist_id, *, offset, limit, query: {
-            "playlist": {"id": playlist_id, "name": "我的歌单"},
-            "songs": [{"id": 101, "name": "歌曲"}],
-            "offset": offset,
-            "limit": limit,
-            "total": 1,
-            "has_more": False,
-            "query": query,
-        },
+        "playlist_track_ids",
+        lambda self, playlist_id: ({"id": playlist_id, "name": "我的歌单"}, [101]),
+    )
+    monkeypatch.setattr(
+        NeteaseClient,
+        "songs_by_ids",
+        lambda self, song_ids: [{"id": song_id, "name": "歌曲"} for song_id in song_ids],
     )
 
     playlists = client.get("/api/playlists")
@@ -482,9 +489,37 @@ def test_member_can_read_bound_playlists_and_tracks(monkeypatch, tmp_path):
     assert playlists.status_code == 200
     assert len(playlists.get_json()["playlists"]) == 1
     assert playlists.get_json()["playlists"][0]["id"] == 12
+    assert playlists.headers["Cache-Control"] == "private, no-store"
     assert tracks.status_code == 200
     assert tracks.get_json()["songs"][0]["id"] == 101
     assert tracks.get_json()["query"] == ""
+    assert tracks.headers["Cache-Control"] == "private, no-store"
+
+
+def test_refresh_playlists_invalidates_the_current_users_cache(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    bindings.save("2", {"nickname": "测试用户", "avatarUrl": ""}, [{"name": "MUSIC_U", "value": "secret"}])
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+    calls = []
+
+    def user_playlists(self, user_id):
+        calls.append(user_id)
+        return [{
+            "id": len(calls),
+            "name": "我的歌单",
+            "creator": {"user_id": user_id, "nickname": "测试用户"},
+        }]
+
+    monkeypatch.setattr(NeteaseClient, "user_playlists", user_playlists)
+
+    assert client.get("/api/playlists").get_json()["playlists"][0]["id"] == 1
+    assert client.get("/api/playlists").get_json()["playlists"][0]["id"] == 1
+    refreshed = client.post("/api/playlists/refresh", json={})
+
+    assert refreshed.status_code == 200
+    assert refreshed.get_json()["playlists"][0]["id"] == 2
+    assert calls == [2, 2]
 
 
 def test_playlist_tracks_rejects_invalid_pagination(monkeypatch, tmp_path):

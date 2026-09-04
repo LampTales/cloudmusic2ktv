@@ -26,6 +26,7 @@ from cloudmusic2ktv.accounts import (
     WebsiteAccountStore,
 )
 from cloudmusic2ktv.access import AllowlistError, AllowlistStore, UserNotAllowed
+from cloudmusic2ktv.playlist_cache import PlaylistCache
 from cloudmusic2ktv.service import local_song_status, parse_song_id, safe_filename
 from cloudmusic2ktv.sessions import FileSessionStore
 from cloudmusic2ktv.video import (
@@ -45,6 +46,8 @@ OUTPUTS = ROOT / "outputs"
 SESSION_COOKIE = "cloudmusic2ktv_session"
 SESSION_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_SESSION_DAYS", "90")) * 24 * 60 * 60
 MEDIA_URL_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_MEDIA_URL_TTL_SECONDS", "3600"))
+PLAYLIST_CACHE_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_PLAYLIST_CACHE_TTL_SECONDS", "21600"))
+PLAYLIST_CACHE_MAX_ENTRIES = int(os.environ.get("CLOUDMUSIC2KTV_PLAYLIST_CACHE_MAX_ENTRIES", "32"))
 IDENTITY_CONFIRMATION_TTL_SECONDS = 5 * 60
 MEDIA_SIGNING_KEY_FILE = INSTANCE / "media_signing.key"
 _media_signing_key_lock = threading.Lock()
@@ -128,6 +131,10 @@ allowlist = AllowlistStore(INSTANCE / "allowlist.json")
 website_accounts = WebsiteAccountStore(INSTANCE / "accounts.json")
 netease_bindings = NeteaseBindingStore(INSTANCE / "netease_bindings.json")
 video_jobs = VideoJobManager(OUTPUTS, state_path=INSTANCE / "video_jobs.json")
+playlist_cache = PlaylistCache(
+    ttl_seconds=PLAYLIST_CACHE_TTL_SECONDS,
+    max_playlists=PLAYLIST_CACHE_MAX_ENTRIES,
+)
 download_state_lock = threading.Lock()
 active_downloads: set[int] = set()
 cookie_import_rate_lock = threading.Lock()
@@ -631,6 +638,7 @@ def reauthenticate_netease() -> Any:
             session.pending_identity_confirmation = None
             raise UserNotAllowed("只能重新验证当前网站账号绑定的网易云账号")
         netease_bindings.save(profile["userId"], profile, session.client.export_cookies())
+        playlist_cache.invalidate_user(profile["userId"])
         session.client.session.cookies.clear()
         session.pending_qr = None
         session.pending_identity_confirmation = None
@@ -692,10 +700,14 @@ def netease_binding_status() -> Any:
 @app.post("/api/auth/logout")
 def logout() -> Any:
     token = auth_token()
+    netease_user_id = None
     with auth_sessions.open(token, touch=False) as session:
         if session is not None:
+            netease_user_id = (session.profile or {}).get("netease_user_id")
             session.profile = None
     auth_sessions.delete(token)
+    if netease_user_id is not None:
+        playlist_cache.invalidate_user(netease_user_id)
     response = jsonify({"ok": True, "message": "已退出登录并删除本地会话"})
     response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
     return response
@@ -715,25 +727,41 @@ def search() -> Any:
 @app.get("/api/playlists")
 @read_only_member_required
 def playlists() -> Any:
+    return playlists_response()
+
+
+@app.post("/api/playlists/refresh")
+@member_required
+def refresh_playlists() -> Any:
+    return playlists_response(refresh=True)
+
+
+def playlists_response(*, refresh: bool = False) -> Any:
     netease_user_id = int(g.current_user["netease_user_id"])
     if not netease_bindings.load(netease_user_id):
         return error_response("请先绑定并验证网易云账号", "netease_reauth_required", 401)
+    if refresh:
+        playlist_cache.invalidate_user(netease_user_id)
     with current_netease_client(touch=False) as client:
-        items = client.user_playlists(netease_user_id)
-    items = [
-        item
-        for item in items
-        if str((item.get("creator") or {}).get("user_id") or "") == str(netease_user_id)
-    ]
+        items = playlist_cache.get_playlists(
+            netease_user_id,
+            lambda: [
+                item
+                for item in client.user_playlists(netease_user_id)
+                if str((item.get("creator") or {}).get("user_id") or "")
+                == str(netease_user_id)
+            ],
+        )
     response = jsonify({"ok": True, "playlists": items})
-    response.headers["Cache-Control"] = "private, max-age=60"
+    response.headers["Cache-Control"] = "private, no-store"
     return response
 
 
 @app.get("/api/playlists/<int:playlist_id>/tracks")
 @read_only_member_required
 def playlist_tracks(playlist_id: int) -> Any:
-    if not netease_bindings.load(g.current_user.get("netease_user_id")):
+    netease_user_id = g.current_user.get("netease_user_id")
+    if not netease_bindings.load(netease_user_id):
         return error_response("请先绑定并验证网易云账号", "netease_reauth_required", 401)
     try:
         offset = int(request.args.get("offset", "0"))
@@ -746,9 +774,17 @@ def playlist_tracks(playlist_id: int) -> Any:
     if len(query) > 100:
         return error_response("歌单搜索关键词过长", "invalid_query", 400)
     with current_netease_client(touch=False) as client:
-        result = client.playlist_tracks(playlist_id, offset=offset, limit=limit, query=query)
+        result = playlist_cache.get_tracks(
+            netease_user_id,
+            playlist_id,
+            offset=offset,
+            limit=limit,
+            query=query,
+            detail_loader=lambda: client.playlist_track_ids(playlist_id),
+            song_loader=client.songs_by_ids,
+        )
     response = jsonify({"ok": True, **result})
-    response.headers["Cache-Control"] = "private, max-age=60"
+    response.headers["Cache-Control"] = "private, no-store"
     return response
 
 

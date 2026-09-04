@@ -97,6 +97,7 @@ def test_playlist_page_has_a_separate_navigation_view():
     assert 'maxlength="100"' in playlist_info
     assert 'id="workbench"' in page
     assert 'api("/api/playlists"' in script
+    assert 'api("/api/playlists/refresh", {method: "POST", body: "{}"})' in script
     assert 'window.scrollTo(0, 0)' in script
     assert 'document.body.classList.toggle("playlist-view", playlistView)' in script
     assert 'finally { busy(button, false); }' in script
@@ -126,6 +127,8 @@ def test_rare_netease_identity_confirmation_has_an_isolated_modal():
     assert 'payload.identity_confirmation = true' in script
     assert '"/api/auth/identity-confirmation/confirm"' in script
     assert '"/api/auth/identity-confirmation/cancel"' in script
+    assert 'notify("网易云账号已重新验证")' in script
+    assert 'notify("网易云绑定已更新")' not in script
 
 
 def test_system_share_payload_contains_only_the_video_url():

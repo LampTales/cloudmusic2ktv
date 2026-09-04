@@ -152,6 +152,10 @@ outputs/<song_id>_<artist>_<name>/
 
 网易云 Cookie 按绑定的 userId 存在后端 `instance/netease_bindings.json`，不会发送给前端或保存到前端节点磁盘。
 
+歌单列表、歌单 `trackIds` 和已解析的精简歌曲信息保存在单进程内存缓存中，默认使用 6 小时绝对有效期；访问不会延长有效期。歌曲页只补齐当前页尚未缓存的歌曲，首次搜索会补齐完整歌单索引，之后不同关键词复用同一份索引。同一歌单同时发生的读取会合并上游加载，歌曲缓存按网易云用户 ID 与歌单 ID 隔离，最多保留 32 个歌单并按 LRU 淘汰。
+
+“刷新歌单”通过独立 POST 接口清除当前用户的歌单列表、`trackIds` 和歌曲索引后重新读取；原绑定账号重新验证成功、网站账号退出也会清除当前用户缓存。到期项在读取时惰性删除，后端重启会自然清空全部内存缓存。清空搜索框、切换歌单、刷新或关闭浏览器不会清除后端缓存。当前没有更换绑定账号的功能。
+
 ## 7. 视频流水线
 
 `VideoProject` 从歌曲目录读取 metadata、时间轴、音频和封面；`FrameRenderer` 同时用于预览和逐帧视频；`SpectrumData` 使用 FFmpeg 解码和 NumPy FFT；`render_video()` 将 Pillow RGB24 帧写入 FFmpeg stdin，输出 H.264/AAC MP4。
