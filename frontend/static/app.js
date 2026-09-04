@@ -71,6 +71,37 @@ function resolveBackendUrl(value) {
   return appUrl(String(value || ""));
 }
 
+function neteaseThumbnailUrl(value, size) {
+  const source = String(value || "").trim();
+  if (!source) return "";
+  try {
+    const url = new URL(source, window.location.href);
+    if (url.hostname !== "music.126.net" && !url.hostname.endsWith(".music.126.net")) {
+      return source;
+    }
+    const pixels = Math.max(1, Math.round(Number(size) || 1));
+    url.searchParams.set("param", `${pixels}y${pixels}`);
+    return url.href;
+  } catch {
+    return source;
+  }
+}
+
+function setNeteaseThumbnail(image, value, size, retinaSize = size * 2) {
+  const source = String(value || "").trim();
+  image.removeAttribute("srcset");
+  if (!source) {
+    image.removeAttribute("src");
+    return;
+  }
+  const standard = neteaseThumbnailUrl(source, size);
+  const retina = neteaseThumbnailUrl(source, retinaSize);
+  image.src = standard;
+  if (standard !== source && retina !== standard) {
+    image.srcset = `${standard} 1x, ${retina} 2x`;
+  }
+}
+
 function getYdDeviceToken() {
   if (ydDeviceTokenPromise) return ydDeviceTokenPromise;
   ydDeviceTokenPromise = new Promise(resolve => {
@@ -204,6 +235,7 @@ function resetPlaylistState(message = "登录后查看歌单") {
   $("#playlistDetailContent").classList.add("hidden");
   $("#playlistDetailEmpty").classList.remove("hidden");
   $("#playlistCover").removeAttribute("src");
+  $("#playlistCover").removeAttribute("srcset");
   $("#playlistName").textContent = "";
   $("#playlistMeta").textContent = "";
   $("#playlistDescription").textContent = "";
@@ -1056,7 +1088,7 @@ function renderPlaylistList() {
     button.type = "button";
     button.className = playlist.id === selectedPlaylistId ? "active" : "";
     const image = document.createElement("img");
-    image.src = playlist.cover_url || "";
+    setNeteaseThumbnail(image, playlist.cover_url, 48, 96);
     image.alt = "";
     image.loading = "lazy";
     const copy = document.createElement("span");
@@ -1115,7 +1147,7 @@ async function selectPlaylist(playlist, updateList = true) {
   $("#playlistBack").classList.remove("hidden");
   $("#playlistDetailEmpty").classList.add("hidden");
   $("#playlistDetailContent").classList.remove("hidden");
-  $("#playlistCover").src = playlist.cover_url || "";
+  setNeteaseThumbnail($("#playlistCover"), playlist.cover_url, 150, 300);
   $("#playlistName").textContent = playlist.name;
   const creator = playlist.creator?.nickname ? ` · ${playlist.creator.nickname}` : "";
   $("#playlistMeta").textContent = `${playlist.track_count} 首歌曲${creator}`;
@@ -1159,7 +1191,7 @@ function renderPlaylistTracks(data) {
     const number = document.createElement("span");
     number.textContent = String(data.offset + index + 1);
     const image = document.createElement("img");
-    image.src = song.cover_url || "";
+    setNeteaseThumbnail(image, song.cover_url, 48, 96);
     image.alt = "";
     image.loading = "lazy";
     const copy = document.createElement("span");

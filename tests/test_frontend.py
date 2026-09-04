@@ -130,6 +130,19 @@ def test_playlist_state_is_isolated_between_website_accounts():
     assert script.count("await refreshAfterNeteaseReauthentication()") == 3
 
 
+def test_playlist_images_use_small_netease_cdn_thumbnails():
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "function neteaseThumbnailUrl(value, size)" in script
+    assert 'url.hostname.endsWith(".music.126.net")' in script
+    assert 'url.searchParams.set("param", `${pixels}y${pixels}`)' in script
+    assert "setNeteaseThumbnail(image, playlist.cover_url, 48, 96)" in script
+    assert 'setNeteaseThumbnail($("#playlistCover"), playlist.cover_url, 150, 300)' in script
+    assert "setNeteaseThumbnail(image, song.cover_url, 48, 96)" in script
+    assert "image.src = song.cover_url" not in script
+    assert '$("#playlistCover").removeAttribute("srcset")' in script
+
+
 def test_login_uses_password_manager_form_semantics():
     page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
 
