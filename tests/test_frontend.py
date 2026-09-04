@@ -82,6 +82,67 @@ def test_standalone_frontend_keeps_root_routes_without_a_base_path(monkeypatch):
     assert client.get("/static/app.js").status_code == 200
 
 
+def test_playlist_page_has_a_separate_navigation_view():
+    page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert page.count('<nav class="page-nav"') == 1
+    nav = page.split('<nav class="page-nav"', 1)[1].split("</nav>", 1)[0]
+    assert nav.count("<a ") == 4
+    assert '<a href="#playlists">我的歌单</a>' in page
+    assert nav.index('href="#videoBuilder"') < nav.index('href="#playlists"')
+    assert 'id="playlistLayout" class="playlist-layout"' in page
+    playlist_info = page.split('<div class="playlist-info">', 1)[1].split('</div>\n            </div>', 1)[0]
+    assert 'id="playlistTrackSearch"' in playlist_info
+    assert 'maxlength="100"' in playlist_info
+    assert 'id="workbench"' in page
+    assert 'api("/api/playlists"' in script
+    assert 'api("/api/playlists/refresh", {method: "POST", body: "{}"})' in script
+    assert 'window.scrollTo(0, 0)' in script
+    assert 'document.body.classList.toggle("playlist-view", playlistView)' in script
+    assert 'finally { busy(button, false); }' in script
+    assert "setApplicationView(\"workbench\", \"songPreview\", false)" in script
+
+
+def test_playlist_state_is_isolated_between_website_accounts():
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    reset = script.split("function resetPlaylistState", 1)[1].split(
+        "function accountPlaylistKey", 1
+    )[0]
+    status = script.split("async function refreshStatus", 1)[1].split(
+        "async function inspectSong", 1
+    )[0]
+    logout = script.split('$("#logout").addEventListener', 1)[1].split(
+        '$("#inspect").addEventListener', 1
+    )[0]
+
+    assert "let playlistAccountKey = null" in script
+    assert "let playlistListRequest = 0" in script
+    assert "playlistListRequest += 1" in reset
+    assert "playlistTrackRequest += 1" in reset
+    assert "playlistsCache = []" in reset
+    assert "selectedPlaylistId = null" in reset
+    assert '$("#playlistDetailContent").classList.add("hidden")' in reset
+    assert "nextPlaylistAccountKey !== playlistAccountKey" in status
+    assert "if (requestNumber !== playlistListRequest) return" in script
+    assert "playlistAccountKey = null" in logout
+    assert "resetPlaylistState()" in logout
+    assert script.count("await refreshAfterNeteaseReauthentication()") == 3
+
+
+def test_playlist_images_use_small_netease_cdn_thumbnails():
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "function neteaseThumbnailUrl(value, size)" in script
+    assert 'url.hostname.endsWith(".music.126.net")' in script
+    assert 'url.searchParams.set("param", `${pixels}y${pixels}`)' in script
+    assert "setNeteaseThumbnail(image, playlist.cover_url, 48, 96)" in script
+    assert 'setNeteaseThumbnail($("#playlistCover"), playlist.cover_url, 150, 300)' in script
+    assert "setNeteaseThumbnail(image, song.cover_url, 48, 96)" in script
+    assert "image.src = song.cover_url" not in script
+    assert '$("#playlistCover").removeAttribute("srcset")' in script
+
+
 def test_login_uses_password_manager_form_semantics():
     page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
 
@@ -92,6 +153,21 @@ def test_login_uses_password_manager_form_semantics():
     assert 'autocomplete="section-login current-password"' in page
     assert 'id="login" class="primary" type="submit"' in page
     assert 'id="searchInput" name="song-search" type="search"' in page
+
+
+def test_rare_netease_identity_confirmation_has_an_isolated_modal():
+    page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="identityConfirmationModal"' in page
+    assert 'id="confirmIdentityConfirmation"' in page
+    assert 'id="cancelIdentityConfirmation"' in page
+    assert 'error.code === "netease_identity_confirmation_required"' in script
+    assert 'payload.identity_confirmation = true' in script
+    assert '"/api/auth/identity-confirmation/confirm"' in script
+    assert '"/api/auth/identity-confirmation/cancel"' in script
+    assert 'notify("网易云账号已重新验证")' in script
+    assert 'notify("网易云绑定已更新")' not in script
 
 
 def test_system_share_payload_contains_only_the_video_url():
@@ -163,7 +239,9 @@ def test_queue_completed_view_is_scrollable_and_selectable():
     assert "queueWaitingTab" in html and "queueCompletedTab" in html
     assert "completedTaskFilename" in script
     assert "已选中完成任务，可继续播放、投屏或下载" in script
-    assert 'selectButton.textContent = "选择任务"' in script
+    assert 'selectButton.textContent = "播放视频"' in script
+    assert 'id="queueCount" class="queue-count" type="button" aria-haspopup="dialog">队列 0</button>' in html
+    assert '$("#queueCount").textContent = `队列 ${queue.queued_count || 0}`' in script
 
 
 def test_queue_polling_is_adaptive_and_pauses_when_hidden():

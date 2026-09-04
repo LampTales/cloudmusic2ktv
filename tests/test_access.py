@@ -3,6 +3,7 @@ import app as web_app
 from cloudmusic2ktv.access import AllowlistStore
 from cloudmusic2ktv.accounts import NeteaseBindingStore, WebsiteAccountStore
 from cloudmusic2ktv.netease import NeteaseClient, NeteaseError
+from cloudmusic2ktv.playlist_cache import PlaylistCache
 from cloudmusic2ktv.sessions import FileSessionStore
 from tests.helpers import set_session_cookie
 
@@ -24,6 +25,7 @@ def member_client(monkeypatch, tmp_path, *, user_id="2", role="user"):
         session.profile = profile
     monkeypatch.setattr(web_app, "auth_sessions", sessions)
     monkeypatch.setattr(web_app, "allowlist", users)
+    monkeypatch.setattr(web_app, "playlist_cache", PlaylistCache())
     client = web_app.app.test_client()
     set_session_cookie(client, token)
     return client
@@ -44,6 +46,13 @@ def test_empty_allowlist_bootstraps_first_successful_login(monkeypatch, tmp_path
             "profile": {"userId": 101, "nickname": "首位用户", "avatarUrl": ""},
         },
     )
+    monkeypatch.setattr(
+        NeteaseClient,
+        "confirm_twice_used_phone",
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("normal registration must not use identity confirmation")
+        ),
+    )
     response = web_app.app.test_client().post(
         "/api/auth/register",
         json={"username": "alice", "password": "password", "phone": "1", "captcha": "2", "country_code": "86"},
@@ -53,6 +62,165 @@ def test_empty_allowlist_bootstraps_first_successful_login(monkeypatch, tmp_path
     assert users.snapshot()[0]["userId"] == "101"
     assert users.snapshot()[0]["role"] == "root"
     assert response.get_json()["role"] == "root"
+
+
+def test_existing_qr_registration_does_not_use_identity_confirmation(monkeypatch, tmp_path):
+    sessions = FileSessionStore(tmp_path / "sessions")
+    users = AllowlistStore(tmp_path / "allowlist.json")
+    accounts = WebsiteAccountStore(tmp_path / "accounts.json")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    monkeypatch.setattr(web_app, "auth_sessions", sessions)
+    monkeypatch.setattr(web_app, "allowlist", users)
+    monkeypatch.setattr(web_app, "website_accounts", accounts)
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+    monkeypatch.setattr(
+        NeteaseClient,
+        "confirm_twice_used_phone",
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("QR registration must not use identity confirmation")
+        ),
+    )
+
+    with sessions.open(None, create=True) as session:
+        token = session.token
+        session.pending_qr = {
+            "purpose": "register",
+            "status": "verified",
+            "profile": {"userId": 101, "nickname": "扫码用户", "avatarUrl": ""},
+        }
+        session.client.session.cookies.set(
+            "MUSIC_U", "qr-login", domain=".music.163.com", path="/"
+        )
+
+    client = web_app.app.test_client()
+    set_session_cookie(client, token)
+    response = client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password", "qr": True},
+    )
+
+    assert response.status_code == 200
+    assert users.role_for(101) == "root"
+    assert accounts.authenticate("alice", "password")["netease_user_id"] == "101"
+    assert bindings.load("101") is not None
+
+
+def test_registration_continues_after_twice_used_phone_confirmation(monkeypatch, tmp_path):
+    sessions = FileSessionStore(tmp_path / "sessions")
+    users = AllowlistStore(tmp_path / "allowlist.json")
+    accounts = WebsiteAccountStore(tmp_path / "accounts.json")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    monkeypatch.setattr(web_app, "auth_sessions", sessions)
+    monkeypatch.setattr(web_app, "allowlist", users)
+    monkeypatch.setattr(web_app, "website_accounts", accounts)
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+
+    def require_confirmation(self, phone, captcha, country_code="86"):
+        self.session.cookies.set("MUSIC_U", "pending-login", domain=".music.163.com", path="/")
+        raise NeteaseError("请确认是否是你本人", code=8860)
+
+    def confirm_identity(self):
+        assert self.session.cookies.get("MUSIC_U") == "pending-login"
+        return {
+            "code": 200,
+            "profile": {"userId": 101, "nickname": "首位用户", "avatarUrl": ""},
+        }
+
+    monkeypatch.setattr(NeteaseClient, "login_with_captcha", require_confirmation)
+    monkeypatch.setattr(NeteaseClient, "confirm_twice_used_phone", confirm_identity)
+    client = web_app.app.test_client()
+
+    started = client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password", "phone": "1", "captcha": "2"},
+    )
+    assert started.status_code == 409
+    assert started.get_json()["error"]["code"] == "netease_identity_confirmation_required"
+    assert "cloudmusic2ktv_session=" in started.headers["Set-Cookie"]
+
+    confirmed = client.post("/api/auth/identity-confirmation/confirm", json={})
+    assert confirmed.status_code == 200
+    assert confirmed.get_json()["purpose"] == "register"
+
+    completed = client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password", "identity_confirmation": True},
+    )
+    assert completed.status_code == 200
+    assert users.role_for(101) == "root"
+    assert accounts.authenticate("alice", "password")["netease_user_id"] == "101"
+    assert bindings.load("101") is not None
+
+
+def test_cancelled_twice_used_phone_confirmation_does_not_register(monkeypatch, tmp_path):
+    sessions = FileSessionStore(tmp_path / "sessions")
+    accounts = WebsiteAccountStore(tmp_path / "accounts.json")
+    monkeypatch.setattr(web_app, "auth_sessions", sessions)
+    monkeypatch.setattr(web_app, "allowlist", AllowlistStore(tmp_path / "allowlist.json"))
+    monkeypatch.setattr(web_app, "website_accounts", accounts)
+    monkeypatch.setattr(web_app, "netease_bindings", NeteaseBindingStore(tmp_path / "bindings.json"))
+
+    def require_confirmation(self, phone, captcha, country_code="86"):
+        self.session.cookies.set("MUSIC_U", "pending-login", domain=".music.163.com", path="/")
+        raise NeteaseError("请确认是否是你本人", code=8860)
+
+    monkeypatch.setattr(NeteaseClient, "login_with_captcha", require_confirmation)
+    client = web_app.app.test_client()
+    started = client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password", "phone": "1", "captcha": "2"},
+    )
+    assert started.status_code == 409
+
+    cancelled = client.post("/api/auth/identity-confirmation/cancel", json={})
+    assert cancelled.status_code == 200
+    missing = client.post("/api/auth/identity-confirmation/confirm", json={})
+    assert missing.status_code == 400
+    assert missing.get_json()["error"]["code"] == "identity_confirmation_missing"
+    assert accounts.authenticate("alice", "password") is None
+
+
+def test_reauthentication_continues_after_twice_used_phone_confirmation(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+    cache_loads = []
+
+    def load_cached_playlists():
+        cache_loads.append(True)
+        return [{"id": len(cache_loads)}]
+
+    assert web_app.playlist_cache.get_playlists("2", load_cached_playlists)[0]["id"] == 1
+
+    def require_confirmation(self, phone, captcha, country_code="86"):
+        self.session.cookies.set("MUSIC_U", "renewed-login", domain=".music.163.com", path="/")
+        raise NeteaseError("请确认是否是你本人", code=8860)
+
+    monkeypatch.setattr(NeteaseClient, "login_with_captcha", require_confirmation)
+    monkeypatch.setattr(
+        NeteaseClient,
+        "confirm_twice_used_phone",
+        lambda self: {
+            "code": 200,
+            "profile": {"userId": 2, "nickname": "测试用户", "avatarUrl": ""},
+        },
+    )
+
+    started = client.post(
+        "/api/auth/reauth",
+        json={"phone": "1", "captcha": "2", "country_code": "86"},
+    )
+    assert started.status_code == 409
+    assert started.get_json()["error"]["code"] == "netease_identity_confirmation_required"
+    assert client.post("/api/auth/identity-confirmation/confirm", json={}).status_code == 200
+
+    completed = client.post(
+        "/api/auth/reauth",
+        json={"identity_confirmation": True},
+    )
+    assert completed.status_code == 200
+    assert bindings.load("2") is not None
+    assert web_app.playlist_cache.get_playlists("2", load_cached_playlists)[0]["id"] == 2
 
 
 def test_non_listed_login_is_rejected_and_does_not_leave_a_session(monkeypatch, tmp_path):
@@ -277,6 +445,105 @@ def test_member_can_check_bound_netease_cookie(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert response.get_json()["valid"] is True
+
+
+def test_member_can_read_bound_playlists_and_tracks(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    bindings.save("2", {"nickname": "测试用户", "avatarUrl": ""}, [{"name": "MUSIC_U", "value": "secret"}])
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+    monkeypatch.setattr(
+        NeteaseClient,
+        "user_playlists",
+        lambda self, user_id: [
+            {
+                "id": 12,
+                "name": "我的歌单",
+                "track_count": 1,
+                "creator": {"user_id": 2, "nickname": "测试用户"},
+                "subscribed": False,
+            },
+            {
+                "id": 13,
+                "name": "收藏的歌单",
+                "track_count": 2,
+                "creator": {"user_id": 3, "nickname": "其他用户"},
+                "subscribed": True,
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        NeteaseClient,
+        "playlist_track_ids",
+        lambda self, playlist_id: ({"id": playlist_id, "name": "我的歌单"}, [101]),
+    )
+    monkeypatch.setattr(
+        NeteaseClient,
+        "songs_by_ids",
+        lambda self, song_ids: [{"id": song_id, "name": "歌曲"} for song_id in song_ids],
+    )
+
+    playlists = client.get("/api/playlists")
+    tracks = client.get("/api/playlists/12/tracks?offset=0&limit=50")
+
+    assert playlists.status_code == 200
+    assert len(playlists.get_json()["playlists"]) == 1
+    assert playlists.get_json()["playlists"][0]["id"] == 12
+    assert playlists.headers["Cache-Control"] == "private, no-store"
+    assert tracks.status_code == 200
+    assert tracks.get_json()["songs"][0]["id"] == 101
+    assert tracks.get_json()["query"] == ""
+    assert tracks.headers["Cache-Control"] == "private, no-store"
+
+
+def test_refresh_playlists_invalidates_the_current_users_cache(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    bindings.save("2", {"nickname": "测试用户", "avatarUrl": ""}, [{"name": "MUSIC_U", "value": "secret"}])
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+    calls = []
+
+    def user_playlists(self, user_id):
+        calls.append(user_id)
+        return [{
+            "id": len(calls),
+            "name": "我的歌单",
+            "creator": {"user_id": user_id, "nickname": "测试用户"},
+        }]
+
+    monkeypatch.setattr(NeteaseClient, "user_playlists", user_playlists)
+
+    assert client.get("/api/playlists").get_json()["playlists"][0]["id"] == 1
+    assert client.get("/api/playlists").get_json()["playlists"][0]["id"] == 1
+    refreshed = client.post("/api/playlists/refresh", json={})
+
+    assert refreshed.status_code == 200
+    assert refreshed.get_json()["playlists"][0]["id"] == 2
+    assert calls == [2, 2]
+
+
+def test_playlist_tracks_rejects_invalid_pagination(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    bindings.save("2", {"nickname": "测试用户", "avatarUrl": ""}, [{"name": "MUSIC_U", "value": "secret"}])
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+
+    response = client.get("/api/playlists/12/tracks?offset=-1&limit=50")
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "invalid_pagination"
+
+
+def test_playlist_tracks_rejects_an_overlong_query(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    bindings.save("2", {"nickname": "测试用户", "avatarUrl": ""}, [{"name": "MUSIC_U", "value": "secret"}])
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+
+    response = client.get(f"/api/playlists/12/tracks?q={'a' * 101}")
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "invalid_query"
 
 
 def test_cookie_check_reports_expired_bound_cookie(monkeypatch, tmp_path):

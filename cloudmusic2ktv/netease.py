@@ -105,6 +105,18 @@ class NeteaseClient:
         self._save_cookies()
         return data
 
+    def confirm_twice_used_phone(self) -> dict[str, Any]:
+        """Confirm that a recycled-phone warning refers to the current user.
+
+        NetEase returns code 8860 from the cellphone login flow when it wants
+        this extra acknowledgement.  The confirmation must use the same
+        session (and therefore the same cookies) as that login attempt.
+        """
+        data = self.weapi("/weapi/login/cellphone/twice/used/confirm", {})
+        self._require_code(data)
+        self._save_cookies()
+        return data
+
     def qr_login_start(self, *, user_agent: str = "") -> dict[str, str]:
         """Create a QR login challenge using the current web login API."""
         headers = {"x-loginmethod": "QrCode"}
@@ -219,6 +231,111 @@ class NeteaseClient:
         self._require_code(data)
         profiles = ((data.get("result") or {}).get("userprofiles") or [])
         return [normalize_user(profile) for profile in profiles if isinstance(profile, dict)]
+
+    def user_playlists(self, user_id: int, limit: int = 1000) -> list[dict[str, Any]]:
+        """Return the playlists visible to a NetEase user.
+
+        The web client exposes this through the private ``weapi`` endpoint.
+        A bound session is required for private playlists and for the user's
+        own ``My Likes`` playlist.
+        """
+        limit = max(1, min(int(limit), 1000))
+        data = self.weapi(
+            "/weapi/user/playlist",
+            {
+                "uid": str(user_id),
+                "limit": str(limit),
+                "offset": "0",
+                "includeVideo": True,
+            },
+        )
+        self._require_code(data)
+        playlists = data.get("playlist") or []
+        return [normalize_playlist(item) for item in playlists if isinstance(item, dict)]
+
+    def playlist_tracks(
+        self,
+        playlist_id: int,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        query: str = "",
+    ) -> dict[str, Any]:
+        """Read one page of songs from a playlist.
+
+        ``/api/v6/playlist/detail`` returns the complete ordered ``trackIds``
+        but only a small ``tracks`` preview.  Resolve the requested IDs via
+        ``/api/v3/song/detail`` in batches; the upstream endpoint accepts at
+        most 1000 IDs.
+        """
+        offset = max(0, int(offset))
+        limit = max(1, min(int(limit), 100))
+        query = str(query or "").strip()
+        playlist, track_ids = self.playlist_track_ids(playlist_id)
+        if query:
+            candidates = self.songs_by_ids(track_ids)
+            terms = [term.casefold() for term in query.split() if term]
+
+            def matches(song: dict[str, Any]) -> bool:
+                searchable = " ".join(
+                    str(song.get(field) or "") for field in ("name", "artist", "album")
+                ).casefold()
+                return all(term in searchable for term in terms)
+
+            filtered = [song for song in candidates if matches(song)]
+            total = len(filtered)
+            songs = filtered[offset : offset + limit]
+        else:
+            total = len(track_ids)
+            songs = self.songs_by_ids(track_ids[offset : offset + limit])
+        return {
+            "playlist": playlist,
+            "songs": songs,
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "has_more": offset + limit < total,
+            "query": query,
+        }
+
+    def playlist_track_ids(self, playlist_id: int) -> tuple[dict[str, Any], list[int]]:
+        """Return normalized playlist metadata and its complete ordered track IDs."""
+        detail = self._post_json(
+            "/api/v6/playlist/detail",
+            data={"id": str(playlist_id), "n": "100000", "s": "8"},
+        )
+        self._require_code(detail)
+        playlist = detail.get("playlist") or {}
+        if not isinstance(playlist, dict):
+            raise NeteaseError("没有找到该歌单", code="playlist_not_found", detail=detail)
+        track_ids = [
+            int(item["id"])
+            for item in (playlist.get("trackIds") or [])
+            if isinstance(item, dict) and str(item.get("id") or "").isdigit()
+        ]
+        return normalize_playlist(playlist), track_ids
+
+    def songs_by_ids(self, song_ids: list[int]) -> list[dict[str, Any]]:
+        """Resolve ordered song IDs in upstream-safe batches."""
+        songs: list[dict[str, Any]] = []
+        for start in range(0, len(song_ids), 1000):
+            songs.extend(self._songs_by_ids(song_ids[start : start + 1000]))
+        return songs
+
+    def _songs_by_ids(self, song_ids: list[int]) -> list[dict[str, Any]]:
+        if not song_ids:
+            return []
+        data = self._post_json(
+            "/api/v3/song/detail",
+            data={"c": json.dumps([{"id": song_id} for song_id in song_ids])},
+        )
+        self._require_code(data)
+        by_id = {
+            int(song["id"]): normalize_song(song)
+            for song in (data.get("songs") or [])
+            if isinstance(song, dict) and str(song.get("id") or "").isdigit()
+        }
+        return [by_id[song_id] for song_id in song_ids if song_id in by_id]
 
     def user_detail(self, user_id: int) -> dict[str, Any]:
         data = self._get_json("/api/user/detail", params={"uid": str(user_id)})
@@ -482,6 +599,28 @@ def normalize_song(song: dict[str, Any]) -> dict[str, Any]:
         "fee": song.get("fee", privilege.get("fee")),
         "copyright": song.get("copyright"),
         "source": song,
+    }
+
+
+def normalize_playlist(playlist: dict[str, Any]) -> dict[str, Any]:
+    creator = playlist.get("creator") or {}
+    playlist_id = playlist.get("id")
+    track_count = playlist.get("trackCount")
+    if track_count is None:
+        track_count = len(playlist.get("trackIds") or [])
+    return {
+        "id": int(playlist_id) if str(playlist_id or "").isdigit() else None,
+        "name": str(playlist.get("name") or "未命名歌单"),
+        "cover_url": str(playlist.get("coverImgUrl") or ""),
+        "track_count": int(track_count or 0),
+        "play_count": int(playlist.get("playCount") or 0),
+        "description": str(playlist.get("description") or ""),
+        "subscribed": bool(playlist.get("subscribed")),
+        "special_type": int(playlist.get("specialType") or 0),
+        "creator": {
+            "user_id": creator.get("userId"),
+            "nickname": str(creator.get("nickname") or ""),
+        },
     }
 
 

@@ -69,6 +69,8 @@ $env:CLOUDMUSIC2KTV_PORT = "7860"
 | `CLOUDMUSIC2KTV_CORS_ORIGINS` | 空 | 允许浏览器跨域直连后端的 Origin，多个值用逗号分隔；同源前端代理模式应留空 |
 | `CLOUDMUSIC2KTV_SESSION_DAYS` | `90` | 网站登录会话有效天数 |
 | `CLOUDMUSIC2KTV_MEDIA_URL_TTL_SECONDS` | `3600` | 投屏短期签名 URL 的有效秒数 |
+| `CLOUDMUSIC2KTV_PLAYLIST_CACHE_TTL_SECONDS` | `21600` | 歌单及歌曲内存缓存的绝对有效秒数，访问不会续期 |
+| `CLOUDMUSIC2KTV_PLAYLIST_CACHE_MAX_ENTRIES` | `32` | 内存中最多保留的歌单歌曲缓存数，超出后按 LRU 淘汰 |
 | `CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY` | 自动生成 | 投屏 URL 签名密钥；正式部署应妥善保管 |
 
 后端容器内部固定监听 `0.0.0.0:7860`，`CLOUDMUSIC2KTV_BACKEND_PORT` 只调整宿主机一侧的发布端口。例如设置为 `17860` 后，端口映射为 `17860:7860`，前端应使用 `http://<BACKEND_PRIVATE_IP>:17860`。同时调整防火墙规则和健康检查地址。
@@ -98,6 +100,8 @@ $env:CLOUDMUSIC2KTV_PORT = "7860"
 | `CLOUDMUSIC2KTV_CORS_ORIGINS` | 空 | 浏览器可跨域访问后端的 Origin 白名单，使用逗号分隔 |
 | `CLOUDMUSIC2KTV_SESSION_DAYS` | `90` | 网站登录会话有效天数 |
 | `CLOUDMUSIC2KTV_MEDIA_URL_TTL_SECONDS` | `3600` | 投屏短期签名 URL 的有效秒数 |
+| `CLOUDMUSIC2KTV_PLAYLIST_CACHE_TTL_SECONDS` | `21600` | 歌单及歌曲内存缓存的绝对有效秒数，访问不会续期 |
+| `CLOUDMUSIC2KTV_PLAYLIST_CACHE_MAX_ENTRIES` | `32` | 内存中最多保留的歌单歌曲缓存数，超出后按 LRU 淘汰 |
 | `CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY` | 自动生成 | 投屏 URL 签名密钥；正式部署应妥善保管 |
 | `CLOUDMUSIC2KTV_TLS_CERT` | 空 | 后端直接提供 HTTPS 时使用的证书文件路径，必须与私钥同时设置 |
 | `CLOUDMUSIC2KTV_TLS_KEY` | 空 | 后端直接提供 HTTPS 时使用的私钥文件路径，必须与证书同时设置 |

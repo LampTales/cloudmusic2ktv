@@ -26,6 +26,7 @@ from cloudmusic2ktv.accounts import (
     WebsiteAccountStore,
 )
 from cloudmusic2ktv.access import AllowlistError, AllowlistStore, UserNotAllowed
+from cloudmusic2ktv.playlist_cache import PlaylistCache
 from cloudmusic2ktv.service import local_song_status, parse_song_id, safe_filename
 from cloudmusic2ktv.sessions import FileSessionStore
 from cloudmusic2ktv.video import (
@@ -45,6 +46,9 @@ OUTPUTS = ROOT / "outputs"
 SESSION_COOKIE = "cloudmusic2ktv_session"
 SESSION_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_SESSION_DAYS", "90")) * 24 * 60 * 60
 MEDIA_URL_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_MEDIA_URL_TTL_SECONDS", "3600"))
+PLAYLIST_CACHE_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_PLAYLIST_CACHE_TTL_SECONDS", "21600"))
+PLAYLIST_CACHE_MAX_ENTRIES = int(os.environ.get("CLOUDMUSIC2KTV_PLAYLIST_CACHE_MAX_ENTRIES", "32"))
+IDENTITY_CONFIRMATION_TTL_SECONDS = 5 * 60
 MEDIA_SIGNING_KEY_FILE = INSTANCE / "media_signing.key"
 _media_signing_key_lock = threading.Lock()
 _media_signing_key_cache: bytes | None = None
@@ -127,6 +131,10 @@ allowlist = AllowlistStore(INSTANCE / "allowlist.json")
 website_accounts = WebsiteAccountStore(INSTANCE / "accounts.json")
 netease_bindings = NeteaseBindingStore(INSTANCE / "netease_bindings.json")
 video_jobs = VideoJobManager(OUTPUTS, state_path=INSTANCE / "video_jobs.json")
+playlist_cache = PlaylistCache(
+    ttl_seconds=PLAYLIST_CACHE_TTL_SECONDS,
+    max_playlists=PLAYLIST_CACHE_MAX_ENTRIES,
+)
 download_state_lock = threading.Lock()
 active_downloads: set[int] = set()
 cookie_import_rate_lock = threading.Lock()
@@ -298,6 +306,36 @@ def _new_qr_chain_id() -> str:
     return f"v1_{device_id}_web_login_{int(time.time() * 1000)}"
 
 
+def _verified_identity_confirmation(session: Any, purpose: str) -> dict[str, Any]:
+    pending = session.pending_identity_confirmation or {}
+    created_at = int(pending.get("created_at") or 0)
+    if created_at < int(time.time()) - IDENTITY_CONFIRMATION_TTL_SECONDS:
+        session.pending_identity_confirmation = None
+        session.client.session.cookies.clear()
+        raise AccountError("网易云账号确认已过期，请重新验证")
+    if pending.get("purpose") != purpose or pending.get("status") != "verified":
+        raise AccountError("请先确认网易云账号是否属于本人")
+    profile = public_profile(pending.get("profile"))
+    if not profile or profile.get("userId") is None:
+        raise AccountError("网易云账号确认结果无效，请重新验证")
+    return profile
+
+
+def _identity_confirmation_required(session: Any, purpose: str) -> tuple[Any, int]:
+    session.pending_identity_confirmation = {
+        "purpose": purpose,
+        "status": "waiting",
+        "created_at": int(time.time()),
+    }
+    response, status_code = error_response(
+        "网易云需要确认当前手机号绑定的账号是否属于本人",
+        "netease_identity_confirmation_required",
+        409,
+    )
+    set_auth_cookie(response, session.token)
+    return response, status_code
+
+
 @app.post("/api/auth/qr/start")
 def start_qr_login() -> Any:
     """Start a current-web QR login challenge for registration or reauth."""
@@ -399,6 +437,54 @@ def poll_qr_login() -> Any:
         return jsonify({"ok": True, "status": "verified", "profile": profile})
 
 
+@app.post("/api/auth/identity-confirmation/confirm")
+def confirm_netease_identity() -> Any:
+    """Complete NetEase's rare recycled-phone ownership confirmation."""
+    with auth_sessions.open(auth_token(), touch=True) as session:
+        if session is None or not session.pending_identity_confirmation:
+            return error_response("没有待确认的网易云账号", "identity_confirmation_missing", 400)
+        pending = session.pending_identity_confirmation
+        if int(pending.get("created_at") or 0) < int(time.time()) - IDENTITY_CONFIRMATION_TTL_SECONDS:
+            session.pending_identity_confirmation = None
+            session.client.session.cookies.clear()
+            return error_response("网易云账号确认已过期，请重新验证", "identity_confirmation_expired", 400)
+        if pending.get("status") != "waiting":
+            return error_response("网易云账号已经确认", "identity_confirmation_complete", 409)
+        try:
+            result = session.client.confirm_twice_used_phone()
+        except NeteaseError as exc:
+            if exc.code in {8861, 8830}:
+                return error_response(
+                    "网易云要求进一步安全验证，请改用二维码或 Cookie 验证",
+                    "netease_additional_verification_required",
+                    409,
+                )
+            raise
+        profile = public_profile(
+            result.get("profile") or session.client.account_status().get("profile")
+        )
+        if not profile or profile.get("userId") is None:
+            raise AccountError("网易云没有返回有效的用户身份")
+        pending["status"] = "verified"
+        pending["profile"] = profile
+        return jsonify(
+            {
+                "ok": True,
+                "purpose": pending.get("purpose"),
+                "profile": profile,
+            }
+        )
+
+
+@app.post("/api/auth/identity-confirmation/cancel")
+def cancel_netease_identity_confirmation() -> Any:
+    with auth_sessions.open(auth_token(), touch=True) as session:
+        if session is not None and session.pending_identity_confirmation:
+            session.pending_identity_confirmation = None
+            session.client.session.cookies.clear()
+    return jsonify({"ok": True})
+
+
 @app.post("/api/auth/login")
 def login() -> Any:
     body = json_body()
@@ -434,10 +520,11 @@ def register() -> Any:
     password = required_string(body, "password")
     cookie_mode = "cookies" in body
     qr_mode = bool(body.get("qr"))
+    identity_confirmation_mode = bool(body.get("identity_confirmation"))
     phone = ""
     captcha = ""
     country_code = clean_country_code(body.get("country_code", "86"))
-    if not qr_mode and not cookie_mode:
+    if not qr_mode and not cookie_mode and not identity_confirmation_mode:
         phone = required_string(body, "phone")
         captcha = required_string(body, "captcha")
     previous_token = None
@@ -453,8 +540,15 @@ def register() -> Any:
             if pending.get("purpose") != "register" or pending.get("status") != "verified":
                 raise AccountError("请先完成网易云扫码验证")
             profile = public_profile(pending.get("profile") or {})
+        elif identity_confirmation_mode:
+            profile = _verified_identity_confirmation(session, "register")
         else:
-            result = session.client.login_with_captcha(phone, captcha, country_code)
+            try:
+                result = session.client.login_with_captcha(phone, captcha, country_code)
+            except NeteaseError as exc:
+                if exc.code == 8860:
+                    return _identity_confirmation_required(session, "register")
+                raise
             profile = public_profile(result.get("profile") or session.client.account_status().get("profile"))
         if not profile or profile.get("userId") is None:
             raise AccountError("网易云没有返回有效的用户身份")
@@ -467,6 +561,7 @@ def register() -> Any:
         except UserNotAllowed:
             session.client.session.cookies.clear()
             session.pending_qr = None
+            session.pending_identity_confirmation = None
             session.profile = None
             rejected = True
             role = None
@@ -483,6 +578,7 @@ def register() -> Any:
             netease_bindings.save(profile["userId"], profile, session.client.export_cookies())
             session.client.session.cookies.clear()
             session.pending_qr = None
+            session.pending_identity_confirmation = None
             session.csrf_token = secrets.token_urlsafe(32)
             session.profile = {
                 "username": account["username"],
@@ -508,10 +604,11 @@ def reauthenticate_netease() -> Any:
     body = json_body()
     cookie_mode = "cookies" in body
     qr_mode = bool(body.get("qr"))
+    identity_confirmation_mode = bool(body.get("identity_confirmation"))
     phone = ""
     captcha = ""
     country_code = clean_country_code(body.get("country_code", "86"))
-    if not qr_mode and not cookie_mode:
+    if not qr_mode and not cookie_mode and not identity_confirmation_mode:
         phone = required_string(body, "phone")
         captcha = required_string(body, "captcha")
     identity = g.current_user
@@ -525,16 +622,26 @@ def reauthenticate_netease() -> Any:
             if pending.get("purpose") != "reauth" or pending.get("status") != "verified":
                 raise AccountError("请先完成网易云扫码验证")
             profile = public_profile(pending.get("profile") or {})
+        elif identity_confirmation_mode:
+            profile = _verified_identity_confirmation(session, "reauth")
         else:
-            result = session.client.login_with_captcha(phone, captcha, country_code)
+            try:
+                result = session.client.login_with_captcha(phone, captcha, country_code)
+            except NeteaseError as exc:
+                if exc.code == 8860:
+                    return _identity_confirmation_required(session, "reauth")
+                raise
             profile = public_profile(result.get("profile") or session.client.account_status().get("profile"))
         if not profile or str(profile.get("userId")) != str(identity["netease_user_id"]):
             session.client.session.cookies.clear()
             session.pending_qr = None
+            session.pending_identity_confirmation = None
             raise UserNotAllowed("只能重新验证当前网站账号绑定的网易云账号")
         netease_bindings.save(profile["userId"], profile, session.client.export_cookies())
+        playlist_cache.invalidate_user(profile["userId"])
         session.client.session.cookies.clear()
         session.pending_qr = None
+        session.pending_identity_confirmation = None
         session.csrf_token = secrets.token_urlsafe(32)
     return jsonify({"ok": True, "message": "网易云账号已重新验证"})
 
@@ -593,10 +700,14 @@ def netease_binding_status() -> Any:
 @app.post("/api/auth/logout")
 def logout() -> Any:
     token = auth_token()
+    netease_user_id = None
     with auth_sessions.open(token, touch=False) as session:
         if session is not None:
+            netease_user_id = (session.profile or {}).get("netease_user_id")
             session.profile = None
     auth_sessions.delete(token)
+    if netease_user_id is not None:
+        playlist_cache.invalidate_user(netease_user_id)
     response = jsonify({"ok": True, "message": "已退出登录并删除本地会话"})
     response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
     return response
@@ -611,6 +722,70 @@ def search() -> Any:
     with anonymous_netease_client() as client:
         songs = client.search_songs(query)
     return jsonify({"ok": True, "songs": songs})
+
+
+@app.get("/api/playlists")
+@read_only_member_required
+def playlists() -> Any:
+    return playlists_response()
+
+
+@app.post("/api/playlists/refresh")
+@member_required
+def refresh_playlists() -> Any:
+    return playlists_response(refresh=True)
+
+
+def playlists_response(*, refresh: bool = False) -> Any:
+    netease_user_id = int(g.current_user["netease_user_id"])
+    if not netease_bindings.load(netease_user_id):
+        return error_response("请先绑定并验证网易云账号", "netease_reauth_required", 401)
+    if refresh:
+        playlist_cache.invalidate_user(netease_user_id)
+    with current_netease_client(touch=False) as client:
+        items = playlist_cache.get_playlists(
+            netease_user_id,
+            lambda: [
+                item
+                for item in client.user_playlists(netease_user_id)
+                if str((item.get("creator") or {}).get("user_id") or "")
+                == str(netease_user_id)
+            ],
+        )
+    response = jsonify({"ok": True, "playlists": items})
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@app.get("/api/playlists/<int:playlist_id>/tracks")
+@read_only_member_required
+def playlist_tracks(playlist_id: int) -> Any:
+    netease_user_id = g.current_user.get("netease_user_id")
+    if not netease_bindings.load(netease_user_id):
+        return error_response("请先绑定并验证网易云账号", "netease_reauth_required", 401)
+    try:
+        offset = int(request.args.get("offset", "0"))
+        limit = int(request.args.get("limit", "100"))
+    except ValueError:
+        return error_response("分页参数格式不正确", "invalid_pagination", 400)
+    if offset < 0 or limit < 1 or limit > 100:
+        return error_response("分页范围不正确", "invalid_pagination", 400)
+    query = (request.args.get("q") or "").strip()
+    if len(query) > 100:
+        return error_response("歌单搜索关键词过长", "invalid_query", 400)
+    with current_netease_client(touch=False) as client:
+        result = playlist_cache.get_tracks(
+            netease_user_id,
+            playlist_id,
+            offset=offset,
+            limit=limit,
+            query=query,
+            detail_loader=lambda: client.playlist_track_ids(playlist_id),
+            song_loader=client.songs_by_ids,
+        )
+    response = jsonify({"ok": True, **result})
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @app.post("/api/song/inspect")
@@ -920,8 +1095,8 @@ def public_profile(value: Any) -> dict[str, Any] | None:
 
 
 @contextmanager
-def current_netease_client() -> Iterator[NeteaseClient]:
-    with auth_sessions.open(auth_token(), touch=True) as session:
+def current_netease_client(*, touch: bool = True) -> Iterator[NeteaseClient]:
+    with auth_sessions.open(auth_token(), touch=touch, persist=touch) as session:
         profile = session.profile if session is not None else None
         client = NeteaseClient()
         if isinstance(profile, dict):
