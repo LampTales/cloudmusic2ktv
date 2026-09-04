@@ -89,10 +89,17 @@ def test_playlist_page_has_a_separate_navigation_view():
     assert page.count('<nav class="page-nav"') == 1
     nav = page.split('<nav class="page-nav"', 1)[1].split("</nav>", 1)[0]
     assert nav.count("<a ") == 4
-    assert '<a href="#playlists">歌单</a>' in page
+    assert '<a href="#playlists">我的歌单</a>' in page
+    assert nav.index('href="#videoBuilder"') < nav.index('href="#playlists"')
     assert 'id="playlistLayout" class="playlist-layout"' in page
+    playlist_info = page.split('<div class="playlist-info">', 1)[1].split('</div>\n            </div>', 1)[0]
+    assert 'id="playlistTrackSearch"' in playlist_info
+    assert 'maxlength="100"' in playlist_info
     assert 'id="workbench"' in page
     assert 'api("/api/playlists"' in script
+    assert 'window.scrollTo(0, 0)' in script
+    assert 'document.body.classList.toggle("playlist-view", playlistView)' in script
+    assert 'finally { busy(button, false); }' in script
     assert "setApplicationView(\"workbench\", \"songPreview\", false)" in script
 
 
@@ -190,7 +197,9 @@ def test_queue_completed_view_is_scrollable_and_selectable():
     assert "queueWaitingTab" in html and "queueCompletedTab" in html
     assert "completedTaskFilename" in script
     assert "已选中完成任务，可继续播放、投屏或下载" in script
-    assert 'selectButton.textContent = "选择任务"' in script
+    assert 'selectButton.textContent = "播放视频"' in script
+    assert 'id="queueCount" class="queue-count" type="button" aria-haspopup="dialog">队列 0</button>' in html
+    assert '$("#queueCount").textContent = `队列 ${queue.queued_count || 0}`' in script
 
 
 def test_queue_polling_is_adaptive_and_pauses_when_hidden():

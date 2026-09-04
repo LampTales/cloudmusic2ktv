@@ -254,7 +254,12 @@ class NeteaseClient:
         return [normalize_playlist(item) for item in playlists if isinstance(item, dict)]
 
     def playlist_tracks(
-        self, playlist_id: int, *, offset: int = 0, limit: int = 100
+        self,
+        playlist_id: int,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        query: str = "",
     ) -> dict[str, Any]:
         """Read one page of songs from a playlist.
 
@@ -265,6 +270,7 @@ class NeteaseClient:
         """
         offset = max(0, int(offset))
         limit = max(1, min(int(limit), 100))
+        query = str(query or "").strip()
         detail = self._post_json(
             "/api/v6/playlist/detail",
             data={"id": str(playlist_id), "n": "100000", "s": "8"},
@@ -273,33 +279,57 @@ class NeteaseClient:
         playlist = detail.get("playlist") or {}
         if not isinstance(playlist, dict):
             raise NeteaseError("没有找到该歌单", code="playlist_not_found", detail=detail)
-        track_ids = playlist.get("trackIds") or []
-        selected_ids = [
+        track_ids = [
             int(item["id"])
-            for item in track_ids[offset : offset + limit]
+            for item in (playlist.get("trackIds") or [])
             if isinstance(item, dict) and str(item.get("id") or "").isdigit()
         ]
-        songs: list[dict[str, Any]] = []
-        if selected_ids:
-            data = self._post_json(
-                "/api/v3/song/detail",
-                data={"c": json.dumps([{"id": song_id} for song_id in selected_ids])},
-            )
-            self._require_code(data)
-            by_id = {
-                int(song["id"]): normalize_song(song)
-                for song in (data.get("songs") or [])
-                if isinstance(song, dict) and str(song.get("id") or "").isdigit()
-            }
-            songs = [by_id[song_id] for song_id in selected_ids if song_id in by_id]
+        if query:
+            candidates: list[dict[str, Any]] = []
+            for start in range(0, len(track_ids), 1000):
+                candidates.extend(self._songs_by_ids(track_ids[start : start + 1000]))
+            terms = [term.casefold() for term in query.split() if term]
+
+            def matches(song: dict[str, Any]) -> bool:
+                searchable = " ".join(
+                    str(song.get(field) or "") for field in ("name", "artist", "album")
+                ).casefold()
+                return all(term in searchable for term in terms)
+
+            filtered = [
+                song
+                for song in candidates
+                if matches(song)
+            ]
+            total = len(filtered)
+            songs = filtered[offset : offset + limit]
+        else:
+            total = len(track_ids)
+            songs = self._songs_by_ids(track_ids[offset : offset + limit])
         return {
             "playlist": normalize_playlist(playlist),
             "songs": songs,
             "offset": offset,
             "limit": limit,
-            "total": len(track_ids),
-            "has_more": offset + limit < len(track_ids),
+            "total": total,
+            "has_more": offset + limit < total,
+            "query": query,
         }
+
+    def _songs_by_ids(self, song_ids: list[int]) -> list[dict[str, Any]]:
+        if not song_ids:
+            return []
+        data = self._post_json(
+            "/api/v3/song/detail",
+            data={"c": json.dumps([{"id": song_id} for song_id in song_ids])},
+        )
+        self._require_code(data)
+        by_id = {
+            int(song["id"]): normalize_song(song)
+            for song in (data.get("songs") or [])
+            if isinstance(song, dict) and str(song.get("id") or "").isdigit()
+        }
+        return [by_id[song_id] for song_id in song_ids if song_id in by_id]
 
     def user_detail(self, user_id: int) -> dict[str, Any]:
         data = self._get_json("/api/user/detail", params={"uid": str(user_id)})

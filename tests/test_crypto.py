@@ -104,3 +104,33 @@ def test_playlist_tracks_resolves_ids_in_original_order(monkeypatch):
     assert result["has_more"] is False
     assert calls[0][0] == "/api/v6/playlist/detail"
     assert json.loads(calls[1][1]["c"]) == [{"id": 102}, {"id": 103}]
+
+
+def test_playlist_tracks_searches_the_complete_playlist_before_paginating(monkeypatch):
+    client = NeteaseClient()
+
+    def fake_post(path, **kwargs):
+        if path.endswith("playlist/detail"):
+            return {
+                "code": 200,
+                "playlist": {
+                    "id": 12,
+                    "name": "歌单",
+                    "trackIds": [{"id": 101}, {"id": 102}, {"id": 103}],
+                },
+            }
+        requested = json.loads(kwargs["data"]["c"])
+        songs = {
+            101: {"id": 101, "name": "夜曲", "ar": [{"name": "周杰伦"}], "al": {"name": "十一月的萧邦"}},
+            102: {"id": 102, "name": "晴天", "ar": [{"name": "周杰伦"}], "al": {"name": "叶惠美"}},
+            103: {"id": 103, "name": "海阔天空", "ar": [{"name": "Beyond"}], "al": {"name": "乐与怒"}},
+        }
+        return {"code": 200, "songs": [songs[item["id"]] for item in requested]}
+
+    monkeypatch.setattr(client, "_post_json", fake_post)
+    result = client.playlist_tracks(12, offset=0, limit=50, query="beyond 乐与怒")
+
+    assert [song["id"] for song in result["songs"]] == [103]
+    assert result["total"] == 1
+    assert result["query"] == "beyond 乐与怒"
+    assert result["has_more"] is False

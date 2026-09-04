@@ -37,6 +37,8 @@ let selectedPlaylistId = null;
 let playlistTrackOffset = 0;
 const PLAYLIST_TRACK_PAGE_SIZE = 50;
 let playlistTrackRequest = 0;
+let playlistTrackQuery = "";
+let playlistTrackSearchTimer = null;
 const API_ORIGIN = String(window.CLOUDMUSIC2KTV_API_ORIGIN || "").replace(/\/+$/, "");
 const APP_BASE_PATH = String(
   window.CLOUDMUSIC2KTV_BASE_PATH || inferBasePath()
@@ -945,6 +947,10 @@ $("#removeAdminEdit").addEventListener("click", () => {
 
 function setApplicationView(view, targetId = "finder", shouldScroll = false) {
   const playlistView = view === "playlists";
+  if (playlistView && !$("#workbench").classList.contains("hidden")) {
+    window.scrollTo(0, 0);
+  }
+  document.body.classList.toggle("playlist-view", playlistView);
   $("#playlists").classList.toggle("hidden", !playlistView);
   $("#workbench").classList.toggle("hidden", playlistView);
   if (playlistView) {
@@ -973,7 +979,9 @@ function updateWorkbenchNav() {
     if (item.section.classList.contains("hidden")) continue;
     if (item.section.offsetTop <= marker) active = item;
   }
-  for (const item of sections) item.link.classList.toggle("active", item === active);
+  for (const link of document.querySelectorAll(".page-nav a")) {
+    link.classList.toggle("active", link === active?.link);
+  }
 }
 
 function renderPlaylistList() {
@@ -1036,6 +1044,9 @@ function escapeHtml(value) {
 async function selectPlaylist(playlist, updateList = true) {
   selectedPlaylistId = Number(playlist.id);
   playlistTrackOffset = 0;
+  playlistTrackQuery = "";
+  clearTimeout(playlistTrackSearchTimer);
+  $("#playlistTrackSearch").value = "";
   if (updateList) renderPlaylistList();
   $("#playlistLayout")?.classList.add("is-detail");
   $("#playlistBack").classList.remove("hidden");
@@ -1057,7 +1068,8 @@ async function loadPlaylistTracks() {
   $("#playlistPrev").disabled = true;
   $("#playlistNext").disabled = true;
   try {
-    const data = await api(`/api/playlists/${encodeURIComponent(selectedPlaylistId)}/tracks?offset=${playlistTrackOffset}&limit=${PLAYLIST_TRACK_PAGE_SIZE}`, {headers: {}});
+    const query = playlistTrackQuery ? `&q=${encodeURIComponent(playlistTrackQuery)}` : "";
+    const data = await api(`/api/playlists/${encodeURIComponent(selectedPlaylistId)}/tracks?offset=${playlistTrackOffset}&limit=${PLAYLIST_TRACK_PAGE_SIZE}${query}`, {headers: {}});
     if (requestNumber !== playlistTrackRequest) return;
     renderPlaylistTracks(data);
   } catch (error) {
@@ -1070,7 +1082,10 @@ function renderPlaylistTracks(data) {
   const tracks = $("#playlistTracks");
   tracks.replaceChildren();
   const songs = Array.isArray(data.songs) ? data.songs : [];
-  $("#playlistTracksMeta").textContent = `第 ${data.offset + 1}–${Math.min(data.offset + data.limit, data.total)} 首`;
+  const range = data.total ? `第 ${data.offset + 1}–${Math.min(data.offset + data.limit, data.total)} 首` : "";
+  $("#playlistTracksMeta").textContent = data.query
+    ? `找到 ${data.total} 首${range ? ` · ${range}` : ""}`
+    : range;
   if (!songs.length) {
     tracks.innerHTML = '<p class="playlist-loading">这一页没有可用歌曲</p>';
   }
@@ -1144,11 +1159,21 @@ $("#adminUserSearchInput").addEventListener("keydown", event => { if (event.key 
 $("#refreshAdminUsers").addEventListener("click", refreshAdminUsers);
 $("#goToBuilder").addEventListener("click", () => $("#videoBuilder").scrollIntoView({behavior: "smooth", block: "start"}));
 $("#refreshPlaylists").addEventListener("click", async event => {
-  busy(event.currentTarget, true, "刷新中…");
-  await loadPlaylists(true);
-  busy(event.currentTarget, false);
+  const button = event.currentTarget;
+  busy(button, true, "刷新中…");
+  try { await loadPlaylists(true); }
+  finally { busy(button, false); }
 });
 $("#playlistSearch").addEventListener("input", renderPlaylistList);
+$("#playlistTrackSearch").addEventListener("input", event => {
+  const query = event.currentTarget.value.trim();
+  clearTimeout(playlistTrackSearchTimer);
+  playlistTrackSearchTimer = setTimeout(() => {
+    playlistTrackQuery = query;
+    playlistTrackOffset = 0;
+    loadPlaylistTracks();
+  }, 350);
+});
 $("#playlistBack").addEventListener("click", () => {
   $("#playlistLayout").classList.remove("is-detail");
   $("#playlistDetailContent").classList.add("hidden");
@@ -1585,7 +1610,7 @@ function stopQueuePolling() {
 function clearQueueView() {
   latestQueue = {current: null, queued: [], queued_count: 0, recent: null, completed: []};
   queueDetailMode = "waiting";
-  $("#queueCount").textContent = "等待 0";
+  $("#queueCount").textContent = "队列 0";
   updateQueueViewButtons();
   $("#queueIdle strong").textContent = "登录后查看生成队列";
   $("#queueIdle span:not(.dock-mark)").textContent = "网站账号登录后会显示任务进度";
@@ -1659,7 +1684,7 @@ function showQueue(queue) {
   latestQueue = {...queue, completed: Array.isArray(queue.completed) ? queue.completed : []};
   updateQueueViewButtons();
   const current = queue.current;
-  $("#queueCount").textContent = `等待 ${queue.queued_count || 0}`;
+  $("#queueCount").textContent = `队列 ${queue.queued_count || 0}`;
   $("#queueIdle strong").textContent = "当前没有生成任务";
   $("#queueIdle span:not(.dock-mark)").textContent = "生成进度会显示在这里";
   $("#queueIdle").classList.toggle("hidden", Boolean(current || queue.recent));
@@ -1701,7 +1726,7 @@ function showQueue(queue) {
     const selectButton = document.createElement("button");
     selectButton.type = "button";
     selectButton.className = "queue-recent-select";
-    selectButton.textContent = "选择任务";
+    selectButton.textContent = "播放视频";
     selectButton.addEventListener("click", () => selectCompletedTask(latest));
     recent.append(selectButton);
   }

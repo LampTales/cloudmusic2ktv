@@ -17,9 +17,9 @@
       </a>
       <nav class="page-nav" aria-label="页面导航">
         <a class="active" href="#finder">检索歌曲</a>
-        <a href="#playlists">歌单</a>
         <a href="#songPreview">当前歌曲</a>
         <a href="#videoBuilder">视频制作</a>
+        <a href="#playlists">我的歌单</a>
       </nav>
       <button id="accountPill" class="account-pill" type="button" aria-haspopup="dialog">
         <span class="dot"></span><span>检查登录状态…</span>
@@ -32,7 +32,7 @@
       <div class="section-heading playlist-page-heading">
         <div class="heading-copy">
           <p class="eyebrow">MY PLAYLISTS</p>
-          <h2 id="playlistPageTitle">网易云歌单</h2>
+          <h2 id="playlistPageTitle">我的歌单</h2>
           <p class="section-guide">浏览已绑定网易云账号的歌单，选择歌曲后返回当前歌曲。</p>
         </div>
         <button id="refreshPlaylists" class="secondary compact" type="button">刷新歌单</button>
@@ -62,6 +62,10 @@
                 <h3 id="playlistName"></h3>
                 <p id="playlistMeta" class="song-meta"></p>
                 <p id="playlistDescription" class="playlist-description"></p>
+              </div>
+              <div class="playlist-track-search-wrap">
+                <label class="visually-hidden" for="playlistTrackSearch">搜索歌单中的歌曲</label>
+                <input id="playlistTrackSearch" class="playlist-track-search" type="search" maxlength="100" placeholder="搜索歌名、歌手或专辑" autocomplete="off">
               </div>
             </div>
             <div class="playlist-tracks-heading">
@@ -323,7 +327,7 @@
         <strong id="queuePercent">0%</strong>
       </div>
       <div id="queueRecent" class="queue-recent hidden"></div>
-      <button id="queueCount" class="queue-count" type="button" aria-haspopup="dialog">等待 0</button>
+      <button id="queueCount" class="queue-count" type="button" aria-haspopup="dialog">队列 0</button>
     </div>
   </aside>
 

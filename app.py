@@ -715,10 +715,16 @@ def search() -> Any:
 @app.get("/api/playlists")
 @read_only_member_required
 def playlists() -> Any:
-    if not netease_bindings.load(g.current_user.get("netease_user_id")):
+    netease_user_id = int(g.current_user["netease_user_id"])
+    if not netease_bindings.load(netease_user_id):
         return error_response("请先绑定并验证网易云账号", "netease_reauth_required", 401)
     with current_netease_client(touch=False) as client:
-        items = client.user_playlists(int(g.current_user["netease_user_id"]))
+        items = client.user_playlists(netease_user_id)
+    items = [
+        item
+        for item in items
+        if str((item.get("creator") or {}).get("user_id") or "") == str(netease_user_id)
+    ]
     response = jsonify({"ok": True, "playlists": items})
     response.headers["Cache-Control"] = "private, max-age=60"
     return response
@@ -736,8 +742,11 @@ def playlist_tracks(playlist_id: int) -> Any:
         return error_response("分页参数格式不正确", "invalid_pagination", 400)
     if offset < 0 or limit < 1 or limit > 100:
         return error_response("分页范围不正确", "invalid_pagination", 400)
+    query = (request.args.get("q") or "").strip()
+    if len(query) > 100:
+        return error_response("歌单搜索关键词过长", "invalid_query", 400)
     with current_netease_client(touch=False) as client:
-        result = client.playlist_tracks(playlist_id, offset=offset, limit=limit)
+        result = client.playlist_tracks(playlist_id, offset=offset, limit=limit, query=query)
     response = jsonify({"ok": True, **result})
     response.headers["Cache-Control"] = "private, max-age=60"
     return response
