@@ -437,6 +437,50 @@ def test_member_can_check_bound_netease_cookie(monkeypatch, tmp_path):
     assert response.get_json()["valid"] is True
 
 
+def test_member_can_read_bound_playlists_and_tracks(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    bindings.save("2", {"nickname": "测试用户", "avatarUrl": ""}, [{"name": "MUSIC_U", "value": "secret"}])
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+    monkeypatch.setattr(
+        NeteaseClient,
+        "user_playlists",
+        lambda self, user_id: [{"id": 12, "name": "我的歌单", "track_count": 1}],
+    )
+    monkeypatch.setattr(
+        NeteaseClient,
+        "playlist_tracks",
+        lambda self, playlist_id, *, offset, limit: {
+            "playlist": {"id": playlist_id, "name": "我的歌单"},
+            "songs": [{"id": 101, "name": "歌曲"}],
+            "offset": offset,
+            "limit": limit,
+            "total": 1,
+            "has_more": False,
+        },
+    )
+
+    playlists = client.get("/api/playlists")
+    tracks = client.get("/api/playlists/12/tracks?offset=0&limit=50")
+
+    assert playlists.status_code == 200
+    assert playlists.get_json()["playlists"][0]["id"] == 12
+    assert tracks.status_code == 200
+    assert tracks.get_json()["songs"][0]["id"] == 101
+
+
+def test_playlist_tracks_rejects_invalid_pagination(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    bindings.save("2", {"nickname": "测试用户", "avatarUrl": ""}, [{"name": "MUSIC_U", "value": "secret"}])
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+
+    response = client.get("/api/playlists/12/tracks?offset=-1&limit=50")
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "invalid_pagination"
+
+
 def test_cookie_check_reports_expired_bound_cookie(monkeypatch, tmp_path):
     client = member_client(monkeypatch, tmp_path, user_id="2")
     bindings = NeteaseBindingStore(tmp_path / "bindings.json")

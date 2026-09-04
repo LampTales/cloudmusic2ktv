@@ -17,8 +17,8 @@
       </a>
       <nav class="page-nav" aria-label="页面导航">
         <a class="active" href="#finder">检索歌曲</a>
+        <a href="#playlists">歌单</a>
         <a href="#songPreview">当前歌曲</a>
-        <a href="#castPanel">本地视频</a>
         <a href="#videoBuilder">视频制作</a>
       </nav>
       <button id="accountPill" class="account-pill" type="button" aria-haspopup="dialog">
@@ -28,6 +28,58 @@
   </header>
 
   <main class="shell">
+    <section id="playlists" class="panel playlist-page hidden" aria-labelledby="playlistPageTitle">
+      <div class="section-heading playlist-page-heading">
+        <div class="heading-copy">
+          <p class="eyebrow">MY PLAYLISTS</p>
+          <h2 id="playlistPageTitle">网易云歌单</h2>
+          <p class="section-guide">浏览已绑定网易云账号的歌单，选择歌曲后返回当前歌曲。</p>
+        </div>
+        <button id="refreshPlaylists" class="secondary compact" type="button">刷新歌单</button>
+      </div>
+      <div id="playlistLayout" class="playlist-layout">
+        <aside class="playlist-sidebar" aria-labelledby="playlistListTitle">
+          <div class="playlist-sidebar-heading">
+            <strong id="playlistListTitle">我的歌单</strong>
+            <span id="playlistCount" class="muted-count"></span>
+          </div>
+          <label class="visually-hidden" for="playlistSearch">筛选歌单</label>
+          <input id="playlistSearch" class="playlist-search" type="search" placeholder="筛选歌单" autocomplete="off">
+          <div id="playlistList" class="playlist-list" aria-live="polite"></div>
+        </aside>
+        <div id="playlistDetail" class="playlist-detail">
+          <button id="playlistBack" class="text-action playlist-back hidden" type="button">← 返回歌单</button>
+          <div id="playlistDetailEmpty" class="playlist-empty">
+            <span class="playlist-empty-icon" aria-hidden="true">♫</span>
+            <strong>选择一个歌单</strong>
+            <p>歌单中的歌曲会显示在这里</p>
+          </div>
+          <div id="playlistDetailContent" class="hidden">
+            <div class="playlist-info">
+              <img id="playlistCover" alt="歌单封面">
+              <div class="playlist-info-copy">
+                <p class="eyebrow">PLAYLIST</p>
+                <h3 id="playlistName"></h3>
+                <p id="playlistMeta" class="song-meta"></p>
+                <p id="playlistDescription" class="playlist-description"></p>
+              </div>
+            </div>
+            <div class="playlist-tracks-heading">
+              <strong>歌曲列表</strong>
+              <span id="playlistTracksMeta" class="helper-text"></span>
+            </div>
+            <div id="playlistTracks" class="playlist-tracks" aria-live="polite"></div>
+            <div class="playlist-pagination">
+              <button id="playlistPrev" class="secondary compact" type="button">上一页</button>
+              <span id="playlistPageMeta" class="helper-text"></span>
+              <button id="playlistNext" class="secondary compact" type="button">下一页</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div id="workbench">
     <section id="finder" class="panel finder-card scroll-target" aria-labelledby="finderTitle">
       <div class="section-heading">
         <div class="heading-copy">
@@ -251,6 +303,7 @@
         <button id="renderVideo" class="primary render-button" type="button" disabled>加入生成队列</button>
       </div>
     </section>
+    </div>
   </main>
 
   <aside id="queuePanel" class="task-dock" aria-live="polite">

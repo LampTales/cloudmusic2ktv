@@ -32,6 +32,11 @@ let ydDeviceTokenPromise = null;
 let adminEditUser = null;
 let pendingIdentityConfirmationPurpose = null;
 let verifiedIdentityConfirmationPurpose = null;
+let playlistsCache = [];
+let selectedPlaylistId = null;
+let playlistTrackOffset = 0;
+const PLAYLIST_TRACK_PAGE_SIZE = 50;
+let playlistTrackRequest = 0;
 const API_ORIGIN = String(window.CLOUDMUSIC2KTV_API_ORIGIN || "").replace(/\/+$/, "");
 const APP_BASE_PATH = String(
   window.CLOUDMUSIC2KTV_BASE_PATH || inferBasePath()
@@ -210,6 +215,10 @@ async function inspectSong(value, shouldScroll = true) {
 }
 
 function showSong(song, local = null, shouldScroll = true, preferredVideoFilename = "") {
+  if (!$("#playlists").classList.contains("hidden")) {
+    history.pushState(null, "", "#songPreview");
+    setApplicationView("workbench", "songPreview", false);
+  }
   selectedSong = {...song};
   preferredSelectedVideoFilename = String(preferredVideoFilename || "");
   localStorage.setItem("cloudmusic2ktv.selectedSongId", String(song.id));
@@ -934,23 +943,185 @@ $("#removeAdminEdit").addEventListener("click", () => {
   deleteAdminUser(adminEditUser.userId, $("#removeAdminEdit"));
 });
 
-function setupSectionNavigation() {
-  const links = [...document.querySelectorAll(".page-nav a")];
+function setApplicationView(view, targetId = "finder", shouldScroll = false) {
+  const playlistView = view === "playlists";
+  $("#playlists").classList.toggle("hidden", !playlistView);
+  $("#workbench").classList.toggle("hidden", playlistView);
+  if (playlistView) {
+    for (const link of document.querySelectorAll(".page-nav a")) {
+      link.classList.toggle("active", link.getAttribute("href") === "#playlists");
+    }
+  } else updateWorkbenchNav();
+  if (playlistView) {
+    loadPlaylists();
+  } else if (shouldScroll) {
+    const target = document.getElementById(targetId) || $("#finder");
+    target.scrollIntoView({behavior: "smooth", block: "start"});
+  }
+}
+
+function updateWorkbenchNav() {
+  if ($("#workbench").classList.contains("hidden")) return;
+  const links = [...document.querySelectorAll(".page-nav a")]
+    .filter(link => link.getAttribute("href") !== "#playlists");
   const sections = links
     .map(link => ({link, section: document.getElementById(link.getAttribute("href").slice(1))}))
     .filter(item => item.section);
-  const update = () => {
-    const marker = window.scrollY + $(".topbar").getBoundingClientRect().height + 36;
-    let active = sections[0];
-    for (const item of sections) {
-      if (item.section.classList.contains("hidden")) continue;
-      if (item.section.offsetTop <= marker) active = item;
+  const marker = window.scrollY + $(".topbar").getBoundingClientRect().height + 36;
+  let active = sections[0];
+  for (const item of sections) {
+    if (item.section.classList.contains("hidden")) continue;
+    if (item.section.offsetTop <= marker) active = item;
+  }
+  for (const item of sections) item.link.classList.toggle("active", item === active);
+}
+
+function renderPlaylistList() {
+  const query = $("#playlistSearch").value.trim().toLowerCase();
+  const list = $("#playlistList");
+  list.replaceChildren();
+  const visible = playlistsCache.filter(item => !query || item.name.toLowerCase().includes(query));
+  $("#playlistCount").textContent = `${visible.length}/${playlistsCache.length}`;
+  if (!visible.length) {
+    list.innerHTML = '<p class="playlist-loading">没有匹配的歌单</p>';
+    return;
+  }
+  for (const playlist of visible) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = playlist.id === selectedPlaylistId ? "active" : "";
+    const image = document.createElement("img");
+    image.src = playlist.cover_url || "";
+    image.alt = "";
+    image.loading = "lazy";
+    const copy = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = playlist.name;
+    const count = document.createElement("small");
+    count.textContent = `${playlist.track_count} 首歌曲`;
+    copy.append(title, count);
+    button.append(image, copy);
+    button.addEventListener("click", () => selectPlaylist(playlist));
+    list.append(button);
+  }
+}
+
+async function loadPlaylists(force = false) {
+  if (playlistsCache.length && !force) {
+    renderPlaylistList();
+    return;
+  }
+  const list = $("#playlistList");
+  list.innerHTML = '<p class="playlist-loading">正在读取歌单…</p>';
+  try {
+    const data = await api("/api/playlists", {headers: {}});
+    playlistsCache = Array.isArray(data.playlists) ? data.playlists : [];
+    renderPlaylistList();
+    if (selectedPlaylistId) {
+      const selected = playlistsCache.find(item => item.id === selectedPlaylistId);
+      if (selected) await selectPlaylist(selected, false);
     }
-    for (const item of sections) item.link.classList.toggle("active", item === active);
-  };
-  window.addEventListener("scroll", update, {passive: true});
-  window.addEventListener("resize", update);
-  requestAnimationFrame(update);
+    if (!playlistsCache.length) list.innerHTML = '<p class="playlist-loading">暂无歌单</p>';
+  } catch (error) {
+    list.innerHTML = `<p class="playlist-error">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function escapeHtml(value) {
+  const node = document.createElement("span");
+  node.textContent = String(value || "");
+  return node.innerHTML;
+}
+
+async function selectPlaylist(playlist, updateList = true) {
+  selectedPlaylistId = Number(playlist.id);
+  playlistTrackOffset = 0;
+  if (updateList) renderPlaylistList();
+  $("#playlistLayout")?.classList.add("is-detail");
+  $("#playlistBack").classList.remove("hidden");
+  $("#playlistDetailEmpty").classList.add("hidden");
+  $("#playlistDetailContent").classList.remove("hidden");
+  $("#playlistCover").src = playlist.cover_url || "";
+  $("#playlistName").textContent = playlist.name;
+  const creator = playlist.creator?.nickname ? ` · ${playlist.creator.nickname}` : "";
+  $("#playlistMeta").textContent = `${playlist.track_count} 首歌曲${creator}`;
+  $("#playlistDescription").textContent = playlist.description || "";
+  await loadPlaylistTracks();
+}
+
+async function loadPlaylistTracks() {
+  if (!selectedPlaylistId) return;
+  const requestNumber = ++playlistTrackRequest;
+  const tracks = $("#playlistTracks");
+  tracks.innerHTML = '<p class="playlist-loading">正在读取歌曲…</p>';
+  $("#playlistPrev").disabled = true;
+  $("#playlistNext").disabled = true;
+  try {
+    const data = await api(`/api/playlists/${encodeURIComponent(selectedPlaylistId)}/tracks?offset=${playlistTrackOffset}&limit=${PLAYLIST_TRACK_PAGE_SIZE}`, {headers: {}});
+    if (requestNumber !== playlistTrackRequest) return;
+    renderPlaylistTracks(data);
+  } catch (error) {
+    if (requestNumber !== playlistTrackRequest) return;
+    tracks.innerHTML = `<p class="playlist-error">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderPlaylistTracks(data) {
+  const tracks = $("#playlistTracks");
+  tracks.replaceChildren();
+  const songs = Array.isArray(data.songs) ? data.songs : [];
+  $("#playlistTracksMeta").textContent = `第 ${data.offset + 1}–${Math.min(data.offset + data.limit, data.total)} 首`;
+  if (!songs.length) {
+    tracks.innerHTML = '<p class="playlist-loading">这一页没有可用歌曲</p>';
+  }
+  songs.forEach((song, index) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "playlist-track-row";
+    const number = document.createElement("span");
+    number.textContent = String(data.offset + index + 1);
+    const image = document.createElement("img");
+    image.src = song.cover_url || "";
+    image.alt = "";
+    image.loading = "lazy";
+    const copy = document.createElement("span");
+    copy.className = "playlist-track-copy";
+    const title = document.createElement("strong");
+    title.textContent = song.name;
+    const meta = document.createElement("small");
+    meta.textContent = `${song.artist || "未知歌手"} · ${song.album || "未知专辑"}`;
+    copy.append(title, meta);
+    row.append(number, image, copy);
+    row.addEventListener("click", () => inspectSong(song.id, true));
+    tracks.append(row);
+  });
+  $("#playlistPrev").disabled = data.offset <= 0;
+  $("#playlistNext").disabled = !data.has_more;
+  const page = Math.floor(data.offset / data.limit) + 1;
+  const pages = Math.max(1, Math.ceil(data.total / data.limit));
+  $("#playlistPageMeta").textContent = `${page} / ${pages}`;
+}
+
+function navigateFromHash(shouldScroll = false) {
+  const hash = String(window.location.hash || "#finder").slice(1);
+  if (hash === "playlists") return setApplicationView("playlists", "playlists", false);
+  setApplicationView("workbench", hash || "finder", shouldScroll);
+}
+
+function setupSectionNavigation() {
+  for (const link of document.querySelectorAll(".page-nav a")) {
+    link.addEventListener("click", event => {
+      event.preventDefault();
+      const hash = link.getAttribute("href") || "#finder";
+      if (window.location.hash !== hash) history.pushState(null, "", hash);
+      navigateFromHash(true);
+    });
+  }
+  window.addEventListener("hashchange", () => navigateFromHash(true));
+  window.addEventListener("popstate", () => navigateFromHash(true));
+  window.addEventListener("scroll", updateWorkbenchNav, {passive: true});
+  window.addEventListener("resize", updateWorkbenchNav);
+  navigateFromHash(false);
 }
 
 $("#searchModeSearch").addEventListener("click", () => setFinderMode("search"));
@@ -972,6 +1143,26 @@ $("#adminUserSearch").addEventListener("click", searchAdminUsers);
 $("#adminUserSearchInput").addEventListener("keydown", event => { if (event.key === "Enter") searchAdminUsers(); });
 $("#refreshAdminUsers").addEventListener("click", refreshAdminUsers);
 $("#goToBuilder").addEventListener("click", () => $("#videoBuilder").scrollIntoView({behavior: "smooth", block: "start"}));
+$("#refreshPlaylists").addEventListener("click", async event => {
+  busy(event.currentTarget, true, "刷新中…");
+  await loadPlaylists(true);
+  busy(event.currentTarget, false);
+});
+$("#playlistSearch").addEventListener("input", renderPlaylistList);
+$("#playlistBack").addEventListener("click", () => {
+  $("#playlistLayout").classList.remove("is-detail");
+  $("#playlistDetailContent").classList.add("hidden");
+  $("#playlistDetailEmpty").classList.remove("hidden");
+});
+$("#playlistPrev").addEventListener("click", () => {
+  if (playlistTrackOffset < PLAYLIST_TRACK_PAGE_SIZE) return;
+  playlistTrackOffset -= PLAYLIST_TRACK_PAGE_SIZE;
+  loadPlaylistTracks();
+});
+$("#playlistNext").addEventListener("click", () => {
+  playlistTrackOffset += PLAYLIST_TRACK_PAGE_SIZE;
+  loadPlaylistTracks();
+});
 
 $("#websiteLoginMode").addEventListener("click", () => setWebsiteAuthMode("login"));
 $("#websiteRegisterMode").addEventListener("click", () => { registerQrVerified = false; setWebsiteAuthMode("register"); });

@@ -95,6 +95,8 @@ Content-Range、Content-Length 和 Content-Disposition，并设置受控的
 名单成员接口：
 
 - 搜索和读取歌曲；
+- `GET /api/playlists`：读取当前绑定网易云账号的歌单；
+- `GET /api/playlists/<playlist_id>/tracks?offset=0&limit=50`：读取歌单歌曲分页；
 - 素材状态和下载；
 - 视频预览、自定义背景、生成、队列和任务状态；
 - artifact HEAD/Range/下载。
@@ -132,9 +134,11 @@ artifact URL 形如：
 ## 6. 网易云和素材流水线
 
 ```text
-NeteaseClient
+    NeteaseClient
   ├─ 登录/账号状态
   ├─ 搜索/歌曲详情/歌词
+  ├─ 用户歌单
+  ├─ 歌单详情 trackIds 与批量歌曲详情
   └─ 播放 URL 与流式下载
         ▼
 SongDownloadService

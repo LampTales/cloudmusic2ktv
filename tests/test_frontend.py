@@ -82,6 +82,20 @@ def test_standalone_frontend_keeps_root_routes_without_a_base_path(monkeypatch):
     assert client.get("/static/app.js").status_code == 200
 
 
+def test_playlist_page_has_a_separate_navigation_view():
+    page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert page.count('<nav class="page-nav"') == 1
+    nav = page.split('<nav class="page-nav"', 1)[1].split("</nav>", 1)[0]
+    assert nav.count("<a ") == 4
+    assert '<a href="#playlists">歌单</a>' in page
+    assert 'id="playlistLayout" class="playlist-layout"' in page
+    assert 'id="workbench"' in page
+    assert 'api("/api/playlists"' in script
+    assert "setApplicationView(\"workbench\", \"songPreview\", false)" in script
+
+
 def test_login_uses_password_manager_form_semantics():
     page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
 

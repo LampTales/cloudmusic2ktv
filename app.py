@@ -712,6 +712,37 @@ def search() -> Any:
     return jsonify({"ok": True, "songs": songs})
 
 
+@app.get("/api/playlists")
+@read_only_member_required
+def playlists() -> Any:
+    if not netease_bindings.load(g.current_user.get("netease_user_id")):
+        return error_response("请先绑定并验证网易云账号", "netease_reauth_required", 401)
+    with current_netease_client(touch=False) as client:
+        items = client.user_playlists(int(g.current_user["netease_user_id"]))
+    response = jsonify({"ok": True, "playlists": items})
+    response.headers["Cache-Control"] = "private, max-age=60"
+    return response
+
+
+@app.get("/api/playlists/<int:playlist_id>/tracks")
+@read_only_member_required
+def playlist_tracks(playlist_id: int) -> Any:
+    if not netease_bindings.load(g.current_user.get("netease_user_id")):
+        return error_response("请先绑定并验证网易云账号", "netease_reauth_required", 401)
+    try:
+        offset = int(request.args.get("offset", "0"))
+        limit = int(request.args.get("limit", "100"))
+    except ValueError:
+        return error_response("分页参数格式不正确", "invalid_pagination", 400)
+    if offset < 0 or limit < 1 or limit > 100:
+        return error_response("分页范围不正确", "invalid_pagination", 400)
+    with current_netease_client(touch=False) as client:
+        result = client.playlist_tracks(playlist_id, offset=offset, limit=limit)
+    response = jsonify({"ok": True, **result})
+    response.headers["Cache-Control"] = "private, max-age=60"
+    return response
+
+
 @app.post("/api/song/inspect")
 @member_required
 def inspect_song() -> Any:
@@ -1019,8 +1050,8 @@ def public_profile(value: Any) -> dict[str, Any] | None:
 
 
 @contextmanager
-def current_netease_client() -> Iterator[NeteaseClient]:
-    with auth_sessions.open(auth_token(), touch=True) as session:
+def current_netease_client(*, touch: bool = True) -> Iterator[NeteaseClient]:
+    with auth_sessions.open(auth_token(), touch=touch, persist=touch) as session:
         profile = session.profile if session is not None else None
         client = NeteaseClient()
         if isinstance(profile, dict):
