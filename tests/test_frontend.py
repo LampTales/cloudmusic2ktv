@@ -133,6 +133,9 @@ def test_playlist_state_is_isolated_between_website_accounts():
 def test_playlist_images_use_small_netease_cdn_thumbnails():
     script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
+    assert "function secureNeteaseMediaUrl(value)" in script
+    assert 'if (url.protocol === "http:") url.protocol = "https:"' in script
+    assert "const source = secureNeteaseMediaUrl(value)" in script
     assert "function neteaseThumbnailUrl(value, size)" in script
     assert 'url.hostname.endsWith(".music.126.net")' in script
     assert 'url.searchParams.set("param", `${pixels}y${pixels}`)' in script
@@ -141,6 +144,17 @@ def test_playlist_images_use_small_netease_cdn_thumbnails():
     assert "setNeteaseThumbnail(image, song.cover_url, 48, 96)" in script
     assert "image.src = song.cover_url" not in script
     assert '$("#playlistCover").removeAttribute("srcset")' in script
+
+
+def test_all_netease_profile_and_song_images_are_upgraded_to_https():
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert '$("#avatar").src = secureNeteaseMediaUrl(data.profile.avatarUrl)' in script
+    assert '$("#cover").src = secureNeteaseMediaUrl(song.cover_url)' in script
+    assert "image.src = secureNeteaseMediaUrl(user.avatarUrl)" in script
+    assert "avatar.src = secureNeteaseMediaUrl(user.avatarUrl)" in script
+    assert '$("#queueCover").src = secureNeteaseMediaUrl(song.cover_url)' in script
+    assert "image.src = secureNeteaseMediaUrl(job.song.cover_url)" in script
 
 
 def test_login_uses_password_manager_form_semantics():
