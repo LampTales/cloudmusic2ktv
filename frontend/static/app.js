@@ -71,8 +71,23 @@ function resolveBackendUrl(value) {
   return appUrl(String(value || ""));
 }
 
-function neteaseThumbnailUrl(value, size) {
+function secureNeteaseMediaUrl(value) {
   const source = String(value || "").trim();
+  if (!source) return "";
+  try {
+    const url = new URL(source, window.location.href);
+    if (url.hostname !== "music.126.net" && !url.hostname.endsWith(".music.126.net")) {
+      return source;
+    }
+    if (url.protocol === "http:") url.protocol = "https:";
+    return url.href;
+  } catch {
+    return source;
+  }
+}
+
+function neteaseThumbnailUrl(value, size) {
+  const source = secureNeteaseMediaUrl(value);
   if (!source) return "";
   try {
     const url = new URL(source, window.location.href);
@@ -281,7 +296,7 @@ async function refreshStatus() {
     $("#manageAllowlist").classList.toggle("hidden", !data.logged_in || !["root", "admin"].includes(accountRole));
     if (data.logged_in) {
       $("#nickname").textContent = `${data.profile.username || data.profile.nickname} · ${data.profile.nickname || ""}`;
-      $("#avatar").src = data.profile.avatarUrl || "";
+      $("#avatar").src = secureNeteaseMediaUrl(data.profile.avatarUrl);
       $("#neteaseBindingStatus").textContent = neteaseBound ? "网站账号已登录 · 已绑定网易云账号" : "网站账号已登录 · 尚未绑定网易云";
       refreshQueue();
     } else {
@@ -314,7 +329,7 @@ function showSong(song, local = null, shouldScroll = true, preferredVideoFilenam
   preferredSelectedVideoFilename = String(preferredVideoFilename || "");
   localStorage.setItem("cloudmusic2ktv.selectedSongId", String(song.id));
   $("#songInput").value = song.id;
-  $("#cover").src = song.cover_url;
+  $("#cover").src = secureNeteaseMediaUrl(song.cover_url);
   $("#songName").textContent = song.name;
   $("#songMeta").textContent = `${song.artist} · ${song.album} · ID ${song.id}`;
   $("#songPreview").classList.remove("hidden");
@@ -879,7 +894,7 @@ function renderAdminUserRow(user, removable) {
   row.className = "admin-user-row";
   if (user.avatarUrl) {
     const image = document.createElement("img");
-    image.src = user.avatarUrl;
+    image.src = secureNeteaseMediaUrl(user.avatarUrl);
     image.alt = "";
     row.append(image);
   }
@@ -916,7 +931,7 @@ function openAdminEditModal(user) {
   $("#adminEditNickname").textContent = user.nickname || "网易云用户";
   $("#adminEditUserId").textContent = `ID ${user.userId}`;
   const avatar = $("#adminEditAvatar");
-  avatar.src = user.avatarUrl || "";
+  avatar.src = secureNeteaseMediaUrl(user.avatarUrl);
   $("#adminEditRole").value = user.role === "admin" ? "admin" : "user";
   $("#adminEditRole").disabled = !canChangeRole;
   $("#adminEditRoleLabel").classList.toggle("hidden", !canChangeRole);
@@ -1792,7 +1807,7 @@ function showQueue(queue) {
   $("#queueCurrent").classList.toggle("hidden", !current);
   if (current) {
     const song = current.song || {};
-    $("#queueCover").src = song.cover_url || "";
+    $("#queueCover").src = secureNeteaseMediaUrl(song.cover_url);
     $("#queueCover").classList.toggle("hidden", !song.cover_url);
     $("#queueSong").textContent = `${song.name || `歌曲 ${current.song_id}`} — ${song.artist || "未知歌手"}`;
     $("#queueMessage").textContent = `${current.resolution} · ${current.message || "等待渲染"}`;
@@ -1862,7 +1877,7 @@ function renderQueueDetails() {
       row.addEventListener("click", () => selectCompletedTask(job));
     }
     if (job.song?.cover_url) {
-      const image = document.createElement("img"); image.src = job.song.cover_url; image.alt = "";
+      const image = document.createElement("img"); image.src = secureNeteaseMediaUrl(job.song.cover_url); image.alt = "";
       row.append(image);
     }
     const copy = document.createElement("div");
