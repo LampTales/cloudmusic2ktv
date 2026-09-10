@@ -63,6 +63,7 @@ class SongDownloadService:
         return local_song_status(self.output_root, song_id, downloading=downloading)
 
     def download(self, song_id: int, level: str = "exhigh") -> dict[str, Any]:
+        self._assert_no_active_video_job(song_id)
         song = self.client.song_detail(song_id)
         lyrics = self.client.lyrics(song_id)
         audio = self.client.player_url(song_id, level=level)
@@ -116,6 +117,29 @@ class SongDownloadService:
             "bitrate": audio.get("br"),
             "size": audio_path.stat().st_size,
         }
+
+    def _assert_no_active_video_job(self, song_id: int) -> None:
+        """Avoid deleting stems/alignment while a queued render uses them.
+
+        The video manager persists its small journal in the same output root.
+        This check complements the in-process download lock and also protects
+        a second backend thread/process from clearing active artifacts.
+        """
+        state_path = self.output_root / ".video_jobs.json"
+        try:
+            value = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return
+        jobs = value.get("jobs") if isinstance(value, dict) else None
+        if not isinstance(jobs, dict):
+            return
+        for job in jobs.values():
+            try:
+                busy_song = int(job.get("song_id", -1)) if isinstance(job, dict) else -1
+            except (TypeError, ValueError):
+                continue
+            if busy_song == int(song_id) and job.get("status") in {"queued", "running"}:
+                raise NeteaseError("这首歌正在生成视频，请等待任务完成后再重新下载", code="song_busy")
 
     def _clear_generated_artifacts(self, song_id: int, directory: Path) -> None:
         """Remove old alignment, stems, previews and generated videos."""

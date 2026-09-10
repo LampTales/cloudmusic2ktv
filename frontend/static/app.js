@@ -1607,11 +1607,19 @@ $("#download").addEventListener("click", async (event) => {
 
 function videoOptions() {
   const lyricHighlightMode = $("#lyricHighlightMode")?.value || "line";
+  const model = $("#alignmentMode")?.value === "model";
+  const selectedLyricMode = $("#lyricMode").value;
+  // The model timeline already contains per-character pronunciation units.
+  // Keep the wire format compatible with VideoOptions while making the UI
+  // choice directly select the ruby mode.
+  const pronunciationMode = model
+    ? (selectedLyricMode === "kana" ? "kana" : selectedLyricMode === "romanization" ? "romaji" : "none")
+    : "none";
   return {
     alignment_mode: $("#alignmentMode")?.value || "legacy",
-    pronunciation_mode: $("#pronunciationMode")?.value || "none",
+    pronunciation_mode: pronunciationMode,
     audio_mode: $("#audioMode")?.value || "original",
-    lyric_mode: $("#lyricMode").value,
+    lyric_mode: model ? "original" : selectedLyricMode,
     lyric_highlight_mode: lyricHighlightMode,
     background_mode: $("#backgroundMode").value,
     background_color: $("#backgroundColor").value,
@@ -1634,6 +1642,20 @@ function updateConditionalOptions() {
   $("#accentColorWrap").classList.toggle("hidden", $("#accentMode").value !== "custom");
   $("#spectrumOpacity").disabled = !$("#spectrumEnabled").checked;
   $("#spectrumValue").textContent = `${$("#spectrumOpacity").value}%`;
+  const lyricMode = $("#lyricMode");
+  const selectedBefore = lyricMode?.value || "original";
+  if (lyricMode) {
+    for (const option of lyricMode.options) {
+      option.hidden = model ? option.value === "translation" : option.value === "kana";
+    }
+    const allowed = model ? new Set(["original", "kana", "romanization"]) : new Set(["original", "translation", "romanization"]);
+    if (!allowed.has(selectedBefore)) lyricMode.value = "original";
+  }
+  // Keep the old pronunciation selector available for backwards-compatible
+  // markup/API clients, but hide it from the model UI where lyricMode is the
+  // single pronunciation choice.
+  const pronunciationControl = $("#pronunciationControl");
+  if (pronunciationControl) pronunciationControl.classList.add("hidden");
   if ($("#pronunciationMode")) {
     $("#pronunciationMode").disabled = !model;
     if (!model) $("#pronunciationMode").value = "none";

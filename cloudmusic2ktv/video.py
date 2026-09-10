@@ -156,17 +156,18 @@ class VideoProject:
         if not metadata_path.exists() or not timeline_path.exists() or not audio_paths or not cover_paths:
             raise VideoError("歌曲素材不完整，请重新下载全部素材")
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        timeline = [
-            line
-            for line in json.loads(timeline_path.read_text(encoding="utf-8"))
-            if _is_display_lyric(line)
-        ]
+        timeline = []
+        for source_index, line in enumerate(json.loads(timeline_path.read_text(encoding="utf-8"))):
+            if _is_display_lyric(line):
+                item = dict(line)
+                item.setdefault("_source_index", source_index)
+                timeline.append(item)
         alignment = None
         alignment_path = directory / "alignment.json"
         if alignment_path.is_file():
             try:
                 value = json.loads(alignment_path.read_text(encoding="utf-8"))
-                if isinstance(value, dict) and isinstance(value.get("lines"), list):
+                if _valid_alignment_payload(value):
                     alignment = value
             except (OSError, ValueError, TypeError):
                 alignment = None
@@ -242,6 +243,11 @@ class FrameRenderer:
         rows = self.project.alignment.get("lines")
         if not isinstance(rows, list):
             return self.project.timeline
+        source_by_index = {
+            int(row.get("_source_index", index)): row
+            for index, row in enumerate(self.project.timeline)
+            if isinstance(row, dict)
+        }
         result = []
         for row in rows:
             if not isinstance(row, dict) or not str(row.get("text") or "").strip():
@@ -249,8 +255,10 @@ class FrameRenderer:
             if row.get("status") == "non_sung":
                 continue
             item = dict(row)
-            item.setdefault("translation", "")
+            source = source_by_index.get(int(row.get("source_index", -1)), {})
+            item.setdefault("translation", source.get("translation", ""))
             item.setdefault("romanization", item.get("romaji", ""))
+            item.setdefault("display_units", [])
             result.append(item)
         return result or self.project.timeline
 
@@ -544,7 +552,7 @@ class FrameRenderer:
         # Model artifacts carry an explicit lyric interval.  The legacy
         # eight-second cap is an interlude heuristic and would truncate a
         # legitimately long model-aligned line halfway through.
-        if self.options.alignment_mode == "model" and (line.get("tokens") or line.get("mora")):
+        if self.options.alignment_mode == "model" and (line.get("display_units") or line.get("tokens") or line.get("mora")):
             return max(start + 400, min(self.project.duration_ms, int(line.get("end_ms", start))))
         if index + 1 >= len(self.timeline):
             return min(self.project.duration_ms, start + MAX_INTERLUDE_SWEEP_MS)
@@ -590,11 +598,13 @@ class FrameRenderer:
     def _model_progress(self, index: int, song_time_ms: int) -> float:
         line = self.timeline[index]
         start, end = int(line.get("start_ms", 0)), int(line.get("end_ms", 0))
-        spans = line.get("tokens") or line.get("mora") or []
+        spans = line.get("display_units") or line.get("tokens") or line.get("mora") or []
         if not spans:
             return _ratio(song_time_ms, start, end)
         completed = 0.0
         total = max(1, end - start)
+        if line.get("display_units"):
+            total = max(1, max(int(item.get("end_ms", start)) for item in line["display_units"]) - start)
         for item in spans:
             a = int(item.get("start_ms", start))
             b = int(item.get("end_ms", a))
@@ -614,7 +624,7 @@ class FrameRenderer:
         font = self._fit_font(text, self._font(60, bold=True, text=text), max_width, 60, bold=True, minimum=36)
         inactive = (236, 238, 241)
         align_left = row == 0
-        if self.options.alignment_mode == "model" and self.options.lyric_highlight_mode == "sweep" and (line.get("tokens") or line.get("mora")) and progress is not None:
+        if self.options.alignment_mode == "model" and self.options.lyric_highlight_mode == "sweep" and (line.get("display_units") or line.get("tokens") or line.get("mora")) and progress is not None:
             self._draw_model_wipe_text(frame, text, y, font, align_left, inactive, line)
         else:
             self._draw_wipe_text(frame, text, y, font, align_left, inactive, progress)
@@ -649,6 +659,25 @@ class FrameRenderer:
         x = self._px(76) if align_left else self.width - self._px(76) - width
         mode = self.options.pronunciation_mode
         small_size = 23 if mode == "kana" else 18
+        units = line.get("display_units") or []
+        if units:
+            # lyric-align provides one-to-one surface units.  This prevents a
+            # multi-kanji Sudachi span from painting ruby over kana characters.
+            for index, unit in enumerate(units[:len(text)]):
+                char = str(unit.get("text") or text[index])
+                if mode == "kana" and not _is_kanji(char):
+                    continue
+                value = str((unit.get("reading") if mode == "kana" else unit.get("romaji")) or "").strip()
+                if not value:
+                    continue
+                left = x + round(draw.textlength(text[:index], font=font))
+                right = x + round(draw.textlength(text[:index + 1], font=font))
+                pfont = self._fit_font(value, self._font(small_size, text=value), max(10, right - left), small_size, minimum=11)
+                pb = draw.textbbox((0, 0), value, font=pfont)
+                px = left + max(0, (right - left - (pb[2] - pb[0])) // 2)
+                py = y - self._px(30 if mode == "kana" else 25)
+                draw.text((px, py), value, font=pfont, fill=(205, 214, 230), stroke_width=self._px(1), stroke_fill=(8, 10, 15))
+            return
         for span in spans:
             a, b = int(span.get("surface_start", 0)), int(span.get("surface_end", 0))
             if b <= a or a >= len(text):
@@ -674,6 +703,9 @@ class FrameRenderer:
         width = bbox[2] - bbox[0]
         x = self._px(76) if align_left else self.width - self._px(76) - width
         draw.text((x, y), text, font=font, fill=inactive, stroke_width=self._px(3), stroke_fill=(8, 10, 15))
+        line_start = int(line.get("start_ms", 0))
+        line_end = int(line.get("end_ms", line_start))
+        units = line.get("display_units") or []
         spans = line.get("surface_spans") or []
         tokens = line.get("mora") or line.get("tokens") or []
         for index, char in enumerate(text):
@@ -684,25 +716,17 @@ class FrameRenderer:
             right = x + round(draw.textlength(text[: index + 1], font=font))
             if right <= left:
                 continue
-            mora_indices = self._char_mora_indices(spans, index, tokens, len(text))
-            if mora_indices and tokens:
-                line_start = int(line.get("start_ms", 0))
-                line_end = int(line.get("end_ms", line_start))
-                singing_end = int(line.get("singing_end_ms") or line_end)
-                # lyric-align owns the timing policy.  Activity-bounded and
-                # ctc_rescaled artifacts already contain final mora bounds;
-                # scaling them again here made the sweep finish too early.
-                timing_source = str(line.get("timing_source") or "")
-                scale = (
-                    (singing_end - line_start) / max(1, line_end - line_start)
-                    if singing_end < line_end and timing_source not in {"activity_interpolation", "ctc_rescaled"}
-                    else 1.0
-                )
-                starts = [line_start + round((int(tokens[m].get("start_ms", line_start)) - line_start) * scale) for m in mora_indices if m < len(tokens)]
-                ends = [line_start + round((int(tokens[m].get("end_ms", line_end)) - line_start) * scale) for m in mora_indices if m < len(tokens)]
-                char_start, char_end = min(starts), max(ends)
+            if units and index < len(units):
+                char_start = int(units[index].get("start_ms", line.get("start_ms", 0)))
+                char_end = int(units[index].get("end_ms", char_start))
             else:
-                char_start, char_end = int(line.get("start_ms", 0)), int(line.get("end_ms", 0))
+                mora_indices = self._char_mora_indices(spans, index, tokens, len(text))
+                if mora_indices and tokens:
+                    starts = [int(tokens[m].get("start_ms", line_start)) for m in mora_indices if m < len(tokens)]
+                    ends = [int(tokens[m].get("end_ms", line_end)) for m in mora_indices if m < len(tokens)]
+                    char_start, char_end = min(starts), max(ends)
+                else:
+                    char_start, char_end = line_start, line_end
             progress = _ratio(self._current_song_time_ms, char_start, max(char_start + 1, char_end))
             if progress <= 0:
                 continue
@@ -1557,6 +1581,37 @@ def _is_display_lyric(line: dict[str, Any]) -> bool:
     if normalized in {"间奏", "間奏", "instrumental"}:
         return False
     if "music" in normalized and len(normalized) <= 24:
+        return False
+    return True
+
+
+def _valid_alignment_payload(value: Any) -> bool:
+    """Lightweight schema gate used before handing data to the renderer."""
+    if not isinstance(value, dict) or not isinstance(value.get("lines"), list):
+        return False
+    try:
+        if int(value.get("schema_version", 1)) < 1:
+            return False
+        previous = -1
+        for row in value["lines"]:
+            if not isinstance(row, dict) or not str(row.get("text") or "").strip():
+                return False
+            start, end = int(row["start_ms"]), int(row["end_ms"])
+            if start < 0 or end < start or start < previous:
+                return False
+            previous = start
+            units = row.get("display_units") or []
+            last_unit = start
+            if not isinstance(units, list):
+                return False
+            for unit in units:
+                if not isinstance(unit, dict):
+                    return False
+                unit_start, unit_end = int(unit["start_ms"]), int(unit["end_ms"])
+                if unit_start < start or unit_end < unit_start or unit_end > end or unit_start < last_unit:
+                    return False
+                last_unit = unit_start
+    except (KeyError, TypeError, ValueError):
         return False
     return True
 
