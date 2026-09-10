@@ -233,6 +233,25 @@
             <span>修改后自动更新预览</span>
           </div>
           <div class="option-grid">
+            <label>歌词对齐
+              <select id="alignmentMode">
+                <option value="legacy">传统句级</option>
+                <option value="model">实验性模型预处理</option>
+              </select>
+            </label>
+            <label>发音标注
+              <select id="pronunciationMode">
+                <option value="none">不显示</option>
+                <option value="kana">汉字上方显示假名</option>
+                <option value="romaji">字符上方显示罗马音</option>
+              </select>
+            </label>
+            <label>音频
+              <select id="audioMode">
+                <option value="original">原唱</option>
+                <option value="instrumental">纯伴奏</option>
+              </select>
+            </label>
             <label>歌词显示
               <select id="lyricMode">
                 <option value="original">仅原文</option>

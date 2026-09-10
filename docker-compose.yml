@@ -12,6 +12,11 @@ services:
       CLOUDMUSIC2KTV_PLAYLIST_CACHE_TTL_SECONDS: ${CLOUDMUSIC2KTV_PLAYLIST_CACHE_TTL_SECONDS:-21600}
       CLOUDMUSIC2KTV_PLAYLIST_CACHE_MAX_ENTRIES: ${CLOUDMUSIC2KTV_PLAYLIST_CACHE_MAX_ENTRIES:-32}
       CLOUDMUSIC2KTV_FONT_DIR: /usr/share/fonts/opentype/noto
+      # Optional model-assisted lyric alignment (leave unset for legacy mode).
+      LYRIC_DEMUCS_MODEL_PATH: ${LYRIC_DEMUCS_MODEL_PATH:-}
+      LYRIC_CTC_MODEL_PATH: ${LYRIC_CTC_MODEL_PATH:-}
+      LYRIC_DEVICE: ${LYRIC_DEVICE:-cpu}
+      LYRIC_G2P_BACKEND: ${LYRIC_G2P_BACKEND:-sudachi}
     volumes:
       - ./docker-data/instance:/app/instance
       - ./docker-data/outputs:/app/outputs

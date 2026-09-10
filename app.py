@@ -846,9 +846,23 @@ def video_preview() -> Any:
     song_id = video_song_id(body.get("song", ""))
     options = VideoOptions.from_mapping(body.get("options"))
     project = VideoProject.load(OUTPUTS, song_id)
+    # Keep previews cheap: model preprocessing belongs to the serialized
+    # video queue, not to a threaded Flask request.
+    preview_fallback = options.alignment_mode == "model" and not project.alignment
+    if preview_fallback:
+        fallback_values = options.to_dict()
+        fallback_values.update(
+            alignment_mode="legacy",
+            pronunciation_mode="none",
+            audio_mode="original",
+            lyric_mode="original",
+        )
+        options = VideoOptions.from_mapping(fallback_values)
     fingerprint = video_options_fingerprint(options)
     destination = project.directory / f"video_preview_{fingerprint}.png"
     result = render_preview(project, options, destination)
+    if preview_fallback:
+        result["model_fallback"] = True
     result["url"] = artifact_url(song_id, destination.name, destination.stat().st_mtime_ns)
     return jsonify({"ok": True, "preview": result})
 

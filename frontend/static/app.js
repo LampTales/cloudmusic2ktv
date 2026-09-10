@@ -644,6 +644,8 @@ function applyLocalStatus(local) {
   if (selectedSongLocal.ready) {
     schedulePreview(true);
   } else {
+    clearTimeout(previewTimer);
+    previewTimer = null;
     previewRequest += 1;
     $("#videoPreviewImage").style.display = "none";
     $("#previewPlaceholder").classList.remove("hidden");
@@ -1588,6 +1590,10 @@ $("#download").addEventListener("click", async (event) => {
     };
     notify("下载完成");
     applyLocalStatus(completedLocal);
+    clearTimeout(previewTimer);
+    previewTimer = null;
+    // Do not keep the download button busy while the preview renders.
+    busy(button, false);
     await refreshVideoPreview(false);
   } catch (error) {
     if (error.code === "netease_reauth_required") openNeteaseReauth();
@@ -1602,6 +1608,9 @@ $("#download").addEventListener("click", async (event) => {
 function videoOptions() {
   const lyricHighlightMode = $("#lyricHighlightMode")?.value || "line";
   return {
+    alignment_mode: $("#alignmentMode")?.value || "legacy",
+    pronunciation_mode: $("#pronunciationMode")?.value || "none",
+    audio_mode: $("#audioMode")?.value || "original",
     lyric_mode: $("#lyricMode").value,
     lyric_highlight_mode: lyricHighlightMode,
     background_mode: $("#backgroundMode").value,
@@ -1619,11 +1628,24 @@ function videoOptions() {
 
 function updateConditionalOptions() {
   const background = $("#backgroundMode").value;
+  const model = $("#alignmentMode")?.value === "model";
   $("#backgroundColorWrap").classList.toggle("hidden", background !== "solid");
   $("#customBackgroundWrap").classList.toggle("hidden", background !== "custom");
   $("#accentColorWrap").classList.toggle("hidden", $("#accentMode").value !== "custom");
   $("#spectrumOpacity").disabled = !$("#spectrumEnabled").checked;
   $("#spectrumValue").textContent = `${$("#spectrumOpacity").value}%`;
+  if ($("#pronunciationMode")) {
+    $("#pronunciationMode").disabled = !model;
+    if (!model) $("#pronunciationMode").value = "none";
+  }
+  if ($("#audioMode")) {
+    $("#audioMode").disabled = !model;
+    if (!model) $("#audioMode").value = "original";
+  }
+  if ($("#lyricHighlightMode") && model && $("#lyricHighlightMode").value === "line") {
+    // Model alignment is intended for timing-aware karaoke; leave the user
+    // free to choose whole-line highlighting, but expose the accurate option.
+  }
 }
 
 function schedulePreview(silent = false) {
@@ -1649,15 +1671,21 @@ async function refreshVideoPreview(silent = false) {
     image.style.display = "block";
     $("#previewPlaceholder").classList.add("hidden");
     const preRoll = data.preview.pre_roll_ms ? ` · 含 ${data.preview.pre_roll_ms / 1000} 秒开场预卷` : "";
-    const highlight = ($("#lyricHighlightMode")?.value || "line") === "sweep" ? "匀速扫色" : "整句点亮";
-    $("#previewMeta").textContent = `${data.preview.width} × ${data.preview.height} · ${highlight} · 点亮颜色 ${data.preview.accent}${preRoll}`;
+    const actualModel = data.preview.alignment_mode === "model";
+    const highlight = ($("#lyricHighlightMode")?.value || "line") === "sweep" ? (actualModel ? "按实际时长扫色" : "匀速扫色") : "整句点亮";
+    const alignment = actualModel ? "模型对齐" : "传统对齐";
+    const fallback = data.preview.model_fallback ? " · 提交后排队生成模型数据" : "";
+    $("#previewMeta").textContent = `${data.preview.width} × ${data.preview.height} · ${alignment} · ${highlight} · 点亮颜色 ${data.preview.accent}${preRoll}${fallback}`;
   } catch (error) {
+    if (requestNumber !== previewRequest) return;
     $("#videoPreviewImage").style.display = "none";
     $("#previewPlaceholder").classList.remove("hidden");
     $("#previewPlaceholder").textContent = error.message.includes("本地还没有") ? "请先下载全部素材，再生成画面预览" : error.message;
     $("#previewMeta").textContent = "预览尚未生成";
     if (!silent) notify(error.message, true);
-  } finally { busy(button, false); }
+  } finally {
+    if (requestNumber === previewRequest) busy(button, false);
+  }
 }
 
 $("#refreshPreview").addEventListener("click", () => refreshVideoPreview(false));

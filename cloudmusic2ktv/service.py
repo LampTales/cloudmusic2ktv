@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -73,6 +74,16 @@ class SongDownloadService:
 
         cover_path = self._download_cover(song, directory)
         audio_path = self._download_audio(audio, directory)
+        # A refreshed song may change container/cover type.  Keep only the
+        # files belonging to the newly downloaded source so local discovery
+        # cannot accidentally select an older copy.
+        for pattern, current in (("cover.*", cover_path), ("audio.*", audio_path)):
+            for old in directory.glob(pattern):
+                if old != current and old.is_file() and not old.name.endswith(".part"):
+                    try:
+                        old.unlink()
+                    except FileNotFoundError:
+                        pass
         timeline = build_timeline(lyrics)
         lyric_types = available_lyric_types(lyrics)
 
@@ -89,6 +100,10 @@ class SongDownloadService:
         self._write_text(
             directory / "lyrics_karaoke_raw.lrc", (lyrics.get("klyric") or {}).get("lyric", "")
         )
+        # Only invalidate derived files after all new source materials have
+        # been downloaded and written successfully.  A failed re-download
+        # therefore does not destroy the last usable generated video.
+        self._clear_generated_artifacts(song_id, directory)
 
         return {
             "song": public_song(song),
@@ -101,6 +116,30 @@ class SongDownloadService:
             "bitrate": audio.get("br"),
             "size": audio_path.stat().st_size,
         }
+
+    def _clear_generated_artifacts(self, song_id: int, directory: Path) -> None:
+        """Remove old alignment, stems, previews and generated videos."""
+        directories = {Path(directory)}
+        directories.update(path for path in self.output_root.glob(f"{song_id}_*") if path.is_dir())
+        for target in directories:
+            for name in (
+                "alignment.json", "alignment.json.part", "preprocessing.json",
+                "preprocessing.json.part", "spectrum_30fps.npz", "custom_background.png",
+            ):
+                try:
+                    (target / name).unlink()
+                except FileNotFoundError:
+                    pass
+            stems = target / "stems"
+            if stems.is_dir():
+                shutil.rmtree(stems, ignore_errors=True)
+            for pattern in ("video_preview*.png", "ktv_*.mp4", "*.part", "*.source.wav"):
+                for artifact in target.glob(pattern):
+                    if artifact.is_file():
+                        try:
+                            artifact.unlink()
+                        except FileNotFoundError:
+                            pass
 
     def _download_cover(self, song: dict[str, Any], directory: Path) -> Path:
         url = song.get("cover_url")

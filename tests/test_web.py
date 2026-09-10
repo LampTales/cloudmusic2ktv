@@ -124,6 +124,57 @@ def test_global_queue_status_does_not_persist_session(monkeypatch, tmp_path):
     write.assert_not_called()
 
 
+def test_model_preview_without_alignment_falls_back_without_preprocessing(monkeypatch, tmp_path):
+    monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    client = member_client(monkeypatch, tmp_path)
+    directory = tmp_path / "123_artist_song"
+    directory.mkdir()
+    (directory / "metadata.json").write_text(
+        '{"id": 123, "name": "song", "artist": "artist", "duration_ms": 10000}',
+        encoding="utf-8",
+    )
+    (directory / "lyrics_timeline.json").write_text(
+        '[{"text":"歌詞", "start_ms":1000, "end_ms":2000}]', encoding="utf-8"
+    )
+    (directory / "audio.mp3").write_bytes(b"audio")
+    (directory / "cover.jpg").write_bytes(b"cover")
+    seen = {}
+
+    def fake_preview(project, options, destination):
+        seen.update(options=options, destination=destination)
+        destination.write_bytes(b"png")
+        return {
+            "width": 1280,
+            "height": 720,
+            "accent": "#4f8cff",
+            "pre_roll_ms": 0,
+            "alignment_mode": options.alignment_mode,
+            "audio_mode": options.audio_mode,
+        }
+
+    monkeypatch.setattr(web_app, "render_preview", fake_preview)
+    response = client.post(
+        "/api/video/preview",
+        json={
+            "song": 123,
+            "options": {
+                "alignment_mode": "model",
+                "pronunciation_mode": "kana",
+                "audio_mode": "instrumental",
+                "lyric_mode": "translation",
+                "lyric_highlight_mode": "sweep",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert seen["options"].alignment_mode == "legacy"
+    assert seen["options"].pronunciation_mode == "none"
+    assert seen["options"].audio_mode == "original"
+    assert seen["options"].lyric_mode == "original"
+    assert response.get_json()["preview"]["model_fallback"] is True
+
+
 def test_local_video_status_lists_only_shareable_generated_mp4(monkeypatch, tmp_path):
     monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
     client = member_client(monkeypatch, tmp_path)

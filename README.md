@@ -406,6 +406,23 @@ outputs/                     源码运行时的素材和视频
 
 ## 任务恢复与数据
 
+### 实验性模型歌词对齐
+
+视频制作页的“实验性模型预处理”会在同一个视频队列任务中依次执行 reading、Demucs 和 CTC，然后继续编码视频；用户无需先单独提交预处理任务。传统模式完全不依赖模型库。
+
+模型模式需要在后端 Python 进程中安装 `lyric_align`（建议 `python -m pip install -e '../lyric_align[all]'`），并配置本地模型路径：
+
+```text
+LYRIC_DEMUCS_MODEL_PATH=/models/htdemucs
+LYRIC_CTC_MODEL_PATH=/models/wav2vec2-japanese
+LYRIC_DEVICE=cpu                 # 或 cuda
+LYRIC_G2P_BACKEND=sudachi       # sudachi/openjtalk/pykakasi
+# 如果不是以 pip 安装，可指向 lyric_align/src
+LYRIC_ALIGN_PATH=/opt/lyric_align/src
+```
+
+模型对象会在单 worker 进程内缓存，后续歌曲复用已加载模型；`alignment.json`、伴奏和歌词时间结果按歌曲目录缓存。纯伴奏选项仅在模型模式下可用。
+
 视频任务状态保存在后端 `instance/video_jobs.json`：
 
 - 队列保持单 worker；
