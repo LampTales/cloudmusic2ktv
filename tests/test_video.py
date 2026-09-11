@@ -14,6 +14,7 @@ from cloudmusic2ktv.video import (
     VideoJobManager,
     render_preview,
     video_options_fingerprint,
+    _valid_alignment_payload,
 )
 import cloudmusic2ktv.video as video_module
 
@@ -222,6 +223,50 @@ def test_project_ignores_blank_and_music_marker_lines(tmp_path):
     assert [line["text"] for line in project.timeline] == ["真正的歌词"]
 
 
+def test_project_loads_alignment_through_public_schema(tmp_path):
+    directory = tmp_path / "123_artist_title"
+    directory.mkdir()
+    (directory / "metadata.json").write_text(
+        json.dumps({"id": 123, "duration_ms": 10_000}), encoding="utf-8"
+    )
+    (directory / "lyrics_timeline.json").write_text(
+        json.dumps([{"text": "歌詞", "start_ms": 1000, "end_ms": 3000}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (directory / "audio.mp3").write_bytes(b"ID3")
+    Image.new("RGB", (100, 100)).save(directory / "cover.jpg")
+    (directory / "alignment.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "song": {},
+                "inputs": {},
+                "timing": {},
+                "lines": [
+                    {
+                        "source_index": 0,
+                        "text": "歌詞",
+                        "start_ms": 1000,
+                        "end_ms": 3000,
+                        "status": "interpolation",
+                        "alignment_status": None,
+                        "timing_source": "line_interpolation",
+                        "display_units": [],
+                    }
+                ],
+                "stages": {},
+                "models": {},
+                "artifacts": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    project = VideoProject.load(tmp_path, 123)
+    assert project.alignment is not None
+    assert project.alignment["lines"][0]["text"] == "歌詞"
+
+
 def test_project_keeps_lyrics_that_only_mention_music(tmp_path):
     directory = tmp_path / "123_artist_title"
     directory.mkdir()
@@ -239,6 +284,24 @@ def test_project_keeps_lyrics_that_only_mention_music(tmp_path):
     Image.new("RGB", (100, 100)).save(directory / "cover.jpg")
     project = VideoProject.load(tmp_path, 123)
     assert [line["text"] for line in project.timeline] == ["music to me"]
+
+
+def test_alignment_schema_gate_rejects_unknown_future_versions():
+    assert not _valid_alignment_payload({"schema_version": 2, "lines": []})
+
+
+def test_instrumental_artifact_reference_cannot_escape_song_directory(tmp_path):
+    project = make_project(tmp_path / "project")
+    outside = project.directory.parent / "instrumental.mp3"
+    outside.write_bytes(b"outside")
+    project = VideoProject(
+        **{
+            **project.__dict__,
+            "alignment": {"artifacts": {"instrumental": "../instrumental.mp3"}},
+        }
+    )
+    with pytest.raises(VideoError, match="纯伴奏尚未准备好"):
+        project.audio_for(VideoOptions(alignment_mode="model", audio_mode="instrumental"))
 
 
 def test_background_job_reports_completion(monkeypatch, tmp_path):

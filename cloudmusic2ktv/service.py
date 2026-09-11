@@ -48,9 +48,20 @@ def safe_filename(value: str, fallback: str = "song") -> str:
 
 
 class SongDownloadService:
-    def __init__(self, client: NeteaseClient, output_root: Path):
+    def __init__(
+        self,
+        client: NeteaseClient,
+        output_root: Path,
+        *,
+        video_jobs_state_path: Path | None = None,
+    ):
         self.client = client
         self.output_root = output_root
+        self.video_jobs_state_path = (
+            Path(video_jobs_state_path)
+            if video_jobs_state_path is not None
+            else Path(output_root).parent / "instance" / "video_jobs.json"
+        )
 
     def inspect(self, song_id: int) -> dict[str, Any]:
         local = load_local_song(self.output_root, song_id)
@@ -121,11 +132,16 @@ class SongDownloadService:
     def _assert_no_active_video_job(self, song_id: int) -> None:
         """Avoid deleting stems/alignment while a queued render uses them.
 
-        The video manager persists its small journal in the same output root.
-        This check complements the in-process download lock and also protects
-        a second backend thread/process from clearing active artifacts.
+        The video manager persists its small journal at
+        ``video_jobs_state_path``. This check complements the in-process
+        download lock and also protects a second backend thread/process from
+        clearing active artifacts.
         """
-        state_path = self.output_root / ".video_jobs.json"
+        # VideoJobManager persists its journal outside the media tree.  Keep
+        # this lightweight cross-component guard pointed at that same file;
+        # the app passes ``instance/`` separately, so derive it from the
+        # service's output root only for the conventional source-tree layout.
+        state_path = self.video_jobs_state_path
         try:
             value = json.loads(state_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError, json.JSONDecodeError):

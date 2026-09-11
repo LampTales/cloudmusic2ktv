@@ -10,6 +10,7 @@ from cloudmusic2ktv.service import (
     parse_song_id,
     safe_filename,
 )
+from cloudmusic2ktv.netease import NeteaseError
 
 
 @pytest.mark.parametrize(
@@ -112,3 +113,18 @@ def test_redownload_cleanup_removes_derived_artifacts_but_keeps_sources(tmp_path
     assert not (directory / "preprocessing.json").exists()
     assert not (directory / "spectrum_30fps.npz").exists()
     assert not (directory / "stems").exists()
+
+
+def test_download_guard_reads_video_job_journal_from_instance(tmp_path):
+    state_path = tmp_path / "instance" / "video_jobs.json"
+    state_path.parent.mkdir()
+    state_path.write_text(
+        json.dumps({"version": 1, "jobs": {"job": {"song_id": 123, "status": "running"}}}),
+        encoding="utf-8",
+    )
+
+    service = SongDownloadService(
+        object(), tmp_path / "outputs", video_jobs_state_path=state_path
+    )
+    with pytest.raises(NeteaseError, match="正在生成视频"):
+        service._assert_no_active_video_job(123)

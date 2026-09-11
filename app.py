@@ -793,7 +793,9 @@ def playlist_tracks(playlist_id: int) -> Any:
 def inspect_song() -> Any:
     song_id = body_song_id()
     with anonymous_netease_client() as client:
-        song = SongDownloadService(client, OUTPUTS).inspect(song_id)
+        song = SongDownloadService(
+            client, OUTPUTS, video_jobs_state_path=INSTANCE / "video_jobs.json"
+        ).inspect(song_id)
     return jsonify({"ok": True, "song": song, "local": song_local_status(song_id)})
 
 
@@ -819,13 +821,17 @@ def download_song() -> Any:
     try:
         try:
             with current_netease_client() as client:
-                result = SongDownloadService(client, OUTPUTS).download(song_id, level)
+                result = SongDownloadService(
+                    client, OUTPUTS, video_jobs_state_path=INSTANCE / "video_jobs.json"
+                ).download(song_id, level)
         except NeteaseError as first_error:
             if not is_netease_auth_failure(first_error):
                 raise
             try:
                 with anonymous_netease_client() as client:
-                    result = SongDownloadService(client, OUTPUTS).download(song_id, level)
+                    result = SongDownloadService(
+                        client, OUTPUTS, video_jobs_state_path=INSTANCE / "video_jobs.json"
+                    ).download(song_id, level)
             except NeteaseError as anonymous_error:
                 if is_netease_auth_failure(anonymous_error):
                     raise NeteaseError(

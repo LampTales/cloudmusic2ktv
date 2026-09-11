@@ -170,12 +170,7 @@ class VideoProject:
         alignment = None
         alignment_path = directory / "alignment.json"
         if alignment_path.is_file():
-            try:
-                value = json.loads(alignment_path.read_text(encoding="utf-8"))
-                if _valid_alignment_payload(value):
-                    alignment = value
-            except (OSError, ValueError, TypeError):
-                alignment = None
+            alignment = _load_alignment_payload(alignment_path)
         return cls(
             directory=directory,
             song=metadata,
@@ -209,8 +204,8 @@ class VideoProject:
             artifacts = self.alignment.get("artifacts") if self.alignment else None
             reference = artifacts.get("instrumental") if isinstance(artifacts, dict) else None
             if reference:
-                candidate = self.directory / str(reference)
-                if candidate.is_file():
+                candidate = _safe_alignment_artifact(self.directory, reference)
+                if candidate is not None and candidate.is_file():
                     return candidate
             raise VideoError("纯伴奏尚未准备好，请使用模型预处理模式生成")
         return self.audio_path
@@ -1614,12 +1609,60 @@ def _is_display_lyric(line: dict[str, Any]) -> bool:
     return True
 
 
+def _safe_alignment_artifact(directory: Path, reference: Any) -> Path | None:
+    """Resolve a library artifact reference without leaving the song tree."""
+    value = str(reference or "").strip()
+    if not value:
+        return None
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return None
+    try:
+        root = Path(directory).resolve()
+        resolved = (root / candidate).resolve()
+    except OSError:
+        return None
+    return resolved if resolved != root and root in resolved.parents else None
+
+
+def _load_alignment_payload(path: Path) -> dict[str, Any] | None:
+    """Load alignment through lyric-align when available.
+
+    The backend keeps legacy rendering usable when the optional package is not
+    installed, but never weakens validation when the package is present.
+    """
+    configured_root = os.environ.get("LYRIC_ALIGN_PATH", "").strip()
+    if configured_root:
+        import sys
+
+        source_root = str(Path(configured_root).expanduser())
+        if source_root not in sys.path:
+            sys.path.insert(0, source_root)
+    try:
+        from lyric_align import load_alignment
+    except ImportError:
+        load_alignment = None
+    if load_alignment is not None:
+        try:
+            artifact = load_alignment(path)
+        except (OSError, TypeError, ValueError):
+            return None
+        return artifact.to_dict() if artifact is not None else None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not _valid_alignment_payload(value):
+        return None
+    return value
+
+
 def _valid_alignment_payload(value: Any) -> bool:
     """Lightweight schema gate used before handing data to the renderer."""
     if not isinstance(value, dict) or not isinstance(value.get("lines"), list):
         return False
     try:
-        if int(value.get("schema_version", 1)) < 1:
+        if int(value.get("schema_version", 0)) != 1:
             return False
         previous = -1
         for row in value["lines"]:
