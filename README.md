@@ -9,6 +9,11 @@ CloudMusic2KTV 将选定的网易云音乐歌曲制作成带歌词的 KTV 视频
 - 前后端可以部署在同一台或不同机器上；
 - 两者不需要位于同一局域网，只要前端机器能通过 ZeroTier、其他 VPN 或专用网络访问后端即可。
 
+## 文档导航
+
+本文面向使用者，集中说明项目功能、账号使用、部署方式和常见配置。
+开发、调试和数据流细节见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
 使用网易云音乐内容时，请遵守当地法律、平台条款和版权方要求。本项目不提供或分发音乐版权。
 
 ## 镜像与端口
@@ -386,7 +391,11 @@ python frontend_server.py
 
 判断是否配置正确只需要遵循一个原则：前端节点必须能访问后端的 `/api/healthz`，客户端只访问前端节点。
 
-## 仓库结构
+## 开发附录
+
+以下内容主要供维护者和自动化开发代理参考。面向用户的部署和使用说明见上文。
+
+### 仓库结构
 
 ```text
 frontend/                    独立静态前端和 Nginx 配置
@@ -404,9 +413,9 @@ outputs/                     源码运行时的素材和视频
 
 `instance/`、`outputs/`、`docker-data/` 不应提交或复制进镜像。
 
-## 任务恢复与数据
+### 任务恢复与数据
 
-### 实验性模型歌词对齐
+#### 实验性模型歌词对齐
 
 视频制作页的“实验性模型预处理”会在同一个视频队列任务中依次执行 reading、Demucs 和 CTC，然后继续编码视频；用户无需先单独提交预处理任务。传统模式完全不依赖模型库。
 
@@ -448,7 +457,7 @@ docker-data/instance/
 docker-data/outputs/
 ```
 
-## CI 与镜像发布
+### CI 与镜像发布
 
 同一仓库的 GitHub Actions 会运行测试，然后分别构建：
 
@@ -461,7 +470,7 @@ Dockerfile.backend  → cloudmusic2ktv-backend
 
 Docker Hub 发布需要在 GitHub Actions 中配置仓库变量 `DOCKERHUB_USERNAME` 和仓库 Secret `DOCKERHUB_TOKEN`。前者填写 Docker Hub 用户名，后者使用具有 Read & Write 权限的 Docker Hub Access Token。也可以从 Actions 页面手动运行此工作流。
 
-## 验证
+### 验证
 
 ```powershell
 python -m pytest -q
@@ -473,7 +482,7 @@ docker compose config
 
 浏览器播放和下载需要网站会话。点击“投屏链接”时，后端会为已登录用户签发短期签名媒体 URL；投屏设备访问该 URL 不需要网站 Cookie，过期后自动失效。签名密钥保存在后端 `instance/media_signing.key`（或由 `CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY` 提供），不得暴露给前端。
 
-## 安全边界
+### 安全边界
 
 - 正式部署只通过 HTTPS 公开前端；
 - 后端端口仅绑定私有/VPN 地址，并限制为前端节点可访问；
