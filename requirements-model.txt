@@ -1,0 +1,7 @@
+-r requirements.txt
+-c constraints-model.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Public source archive pinned to an immutable commit. Using the archive URL
+# keeps the slim Docker image independent of the git executable.
+lyric-align[models] @ https://github.com/LampTales/lyric_align/archive/d378b6c3e04ff7bf3a35b15bfd2b4db8a99c9e8c.tar.gz

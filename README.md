@@ -77,6 +77,11 @@ $env:CLOUDMUSIC2KTV_PORT = "7860"
 | `CLOUDMUSIC2KTV_PLAYLIST_CACHE_TTL_SECONDS` | `21600` | 歌单及歌曲内存缓存的绝对有效秒数，访问不会续期 |
 | `CLOUDMUSIC2KTV_PLAYLIST_CACHE_MAX_ENTRIES` | `32` | 内存中最多保留的歌单歌曲缓存数，超出后按 LRU 淘汰 |
 | `CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY` | 自动生成 | 投屏 URL 签名密钥；正式部署应妥善保管 |
+| `LYRIC_MODELS_DIR` | 必填 | 宿主机上的模型根目录，以只读方式挂载到容器 `/models` |
+| `LYRIC_DEMUCS_MODEL_PATH` | 已验证的 HTDemucs snapshot | Demucs 模型在容器内的本地路径 |
+| `LYRIC_CTC_MODEL_PATH` | 已验证的日语 wav2vec2 snapshot | CTC 模型在容器内的本地路径 |
+| `LYRIC_DEVICE` | `cpu` | 模型推理设备；使用 GPU 镜像和运行时前不要改为 `cuda` |
+| `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS` | `100` | Beta 平滑扫色合并相邻短空隙的阈值，不在前端暴露 |
 
 后端容器内部固定监听 `0.0.0.0:7860`，`CLOUDMUSIC2KTV_BACKEND_PORT` 只调整宿主机一侧的发布端口。例如设置为 `17860` 后，端口映射为 `17860:7860`，前端应使用 `http://<BACKEND_PRIVATE_IP>:17860`。同时调整防火墙规则和健康检查地址。
 
@@ -112,6 +117,11 @@ $env:CLOUDMUSIC2KTV_PORT = "7860"
 | `CLOUDMUSIC2KTV_TLS_KEY` | 空 | 后端直接提供 HTTPS 时使用的私钥文件路径，必须与证书同时设置 |
 | `CLOUDMUSIC2KTV_FFMPEG` | 自动查找 | FFmpeg 可执行文件的明确路径 |
 | `CLOUDMUSIC2KTV_FONT_DIR` | 自动查找 | 中日韩字体目录；找不到合适字体时设置 |
+| `LYRIC_DEMUCS_MODEL_PATH` | 空 | Demucs 模型的本地目录或 Hugging Face snapshot 路径 |
+| `LYRIC_CTC_MODEL_PATH` | 空 | Transformers CTC checkpoint 的本地路径 |
+| `LYRIC_DEVICE` | `cpu` | 模型推理设备 |
+| `LYRIC_G2P_BACKEND` | `sudachi` | 歌词读音后端；KTV 正式路径只验证 Sudachi |
+| `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS` | `100` | Beta 平滑扫色的短空隙阈值 |
 
 正式部署通常由公网代理终止 HTTPS，因此无需给后端设置 `CLOUDMUSIC2KTV_TLS_CERT` 和 `CLOUDMUSIC2KTV_TLS_KEY`。
 
@@ -165,6 +175,24 @@ mkdir -p cloudmusic2ktv-backend/docker-data/outputs
 cd cloudmusic2ktv-backend
 ```
 
+模型权重不在镜像中。后端节点需要准备完整的 Hugging Face 缓存目录，默认放在
+`/var/lib/cloudmusic2ktv/models`。必须复制整个 `huggingface/`，包括 `hub` 下的
+`blobs`、`refs` 和 `snapshots`，不能只复制 snapshot 中指向 blobs 的符号链接：
+
+```bash
+sudo mkdir -p /var/lib/cloudmusic2ktv/models
+```
+
+```text
+/var/lib/cloudmusic2ktv/models/
+└── huggingface/
+    └── hub/
+        ├── models--adefossez--HTDemucs/
+        └── models--jonatasgrosman--wav2vec2-large-xlsr-53-japanese/
+```
+
+容器以只读方式挂载该目录；模型由部署者单独准备，并遵守对应模型的许可证。
+
 下载 Compose 和环境模板：
 
 ```bash
@@ -179,6 +207,8 @@ CLOUDMUSIC2KTV_BACKEND_IMAGE=docker.io/lamptales/cloudmusic2ktv-backend:latest
 CLOUDMUSIC2KTV_BACKEND_BIND_ADDRESS=<BACKEND_PRIVATE_IP>
 CLOUDMUSIC2KTV_BACKEND_PORT=7860
 CLOUDMUSIC2KTV_BASE_PATH=/ktv
+LYRIC_MODELS_DIR=/var/lib/cloudmusic2ktv/models
+LYRIC_DEVICE=cpu
 ```
 
 如果最终地址位于域名根路径，例如 `https://ktv.example.com/`，将 `CLOUDMUSIC2KTV_BASE_PATH` 留空。如果最终地址是 `https://example.com/ktv/`，则设为 `/ktv`。
@@ -187,6 +217,7 @@ Linux 宿主机需要确保容器用户 UID 10001 可以写入数据目录：
 
 ```bash
 sudo chown -R 10001:10001 docker-data
+sudo chmod -R a+rX /var/lib/cloudmusic2ktv/models
 ```
 
 启动并检查：
@@ -297,6 +328,7 @@ CLOUDMUSIC2KTV_BACKEND_IMAGE=docker.io/lamptales/cloudmusic2ktv-backend:latest
 CLOUDMUSIC2KTV_FRONTEND_IMAGE=docker.io/lamptales/cloudmusic2ktv-frontend:latest
 CLOUDMUSIC2KTV_BIND_ADDRESS=127.0.0.1
 CLOUDMUSIC2KTV_FRONTEND_PORT=8080
+LYRIC_MODELS_DIR=./docker-data/models
 ```
 
 启动时禁止本地构建：
@@ -334,6 +366,12 @@ docker compose down
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements-dev.txt
+```
+
+Beta 模式还需要安装固定版本的模型运行依赖：
+
+```powershell
+python -m pip install -r requirements-model.txt
 ```
 
 分别启动：
@@ -419,17 +457,22 @@ outputs/                     源码运行时的素材和视频
 
 视频制作页的“实验性模型预处理”会在同一个视频队列任务中依次执行 reading、Demucs 和 CTC，然后继续编码视频；用户无需先单独提交预处理任务。传统模式完全不依赖模型库。
 
-模型模式需要在后端 Python 进程中安装 `lyric_align`（建议 `python -m pip install -e '../lyric_align[all]'`），并配置本地模型路径：
+后端 Docker 镜像通过 `requirements-model.txt` 从公开 GitHub 仓库安装固定
+commit 的 `lyric-align[models]`。源码开发也可安装该文件，或使用相邻仓库的
+editable package。正式 KTV 路径固定使用经过完整测试的 Sudachi；pykakasi 和
+OpenJTalk 只作为 `lyric-align` 的实验性可选后端，不包含在 KTV 镜像中。
+
+模型权重不进入镜像，运行时必须配置本地模型路径：
 
 ```text
-LYRIC_DEMUCS_MODEL_PATH=/models/htdemucs
-LYRIC_CTC_MODEL_PATH=/models/wav2vec2-japanese
+LYRIC_DEMUCS_MODEL_PATH=/models/huggingface/hub/models--adefossez--HTDemucs/snapshots/<revision>
+LYRIC_CTC_MODEL_PATH=/models/huggingface/hub/models--jonatasgrosman--wav2vec2-large-xlsr-53-japanese/snapshots/<revision>
 LYRIC_DEVICE=cpu                 # 或 cuda
-LYRIC_G2P_BACKEND=sudachi       # sudachi/openjtalk/pykakasi
+LYRIC_G2P_BACKEND=sudachi
 # Model sweep rendering bridges short gaps between adjacent visible characters.
 # This backend-only tuning value is not exposed in the web UI (default: 100 ms).
 CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS=100
-# 如果不是以 pip 安装，可指向 lyric_align/src
+# 仅相邻仓库源码开发时需要；Docker 镜像不设置
 LYRIC_ALIGN_PATH=/opt/lyric_align/src
 ```
 
@@ -470,6 +513,12 @@ Dockerfile.backend  → cloudmusic2ktv-backend
 ```
 
 两个镜像均以同一组 `latest`、`sha-*` 和 `v*.*.*` 标签发布到 Docker Hub 和 GHCR，并支持 `linux/amd64`、`linux/arm64`。Pull Request 只测试和构建，不登录或推送镜像仓库。
+
+后端镜像固定使用 `requirements-model.txt` 中的 `lyric-align` commit 和
+`constraints-model.txt` 中经过验证的模型运行时版本。构建过程只下载 Python
+包和公开源码，不读取模型权重；Torch/TorchAudio 明确使用官方 CPU wheel，
+不会把 CUDA 运行时装入当前 CPU 镜像。权重在容器运行时通过 `/models:ro`
+挂载。
 
 Docker Hub 发布需要在 GitHub Actions 中配置仓库变量 `DOCKERHUB_USERNAME` 和仓库 Secret `DOCKERHUB_TOKEN`。前者填写 Docker Hub 用户名，后者使用具有 Read & Write 权限的 Docker Hub Access Token。也可以从 Actions 页面手动运行此工作流。
 

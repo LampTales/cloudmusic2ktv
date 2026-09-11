@@ -13,6 +13,7 @@ on:
       - "frontend/**"
       - "tests/**"
       - "requirements*.txt"
+      - "constraints*.txt"
       - "Dockerfile.*"
       - ".dockerignore"
       - "docker-compose.yml"
@@ -26,6 +27,7 @@ on:
       - "frontend/**"
       - "tests/**"
       - "requirements*.txt"
+      - "constraints*.txt"
       - "Dockerfile.*"
       - ".dockerignore"
       - "docker-compose.yml"
@@ -51,7 +53,11 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-model.txt
+            constraints-model.txt
 
       - name: Install Linux test dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk

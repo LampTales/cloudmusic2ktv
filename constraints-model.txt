@@ -1,0 +1,8 @@
+# Versions exercised by the lyric-align development environment. Keep Torch
+# and TorchAudio on the same release because their binary APIs are coupled.
+demucs==4.1.0
+sudachipy==0.6.11
+sudachidict-core==20260723
+torch==2.11.0+cpu
+torchaudio==2.11.0+cpu
+transformers==5.16.1
