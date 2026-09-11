@@ -35,6 +35,11 @@ MAX_INTERLUDE_SWEEP_MS = 8_000
 COUNTDOWN_TOP = 720
 SPECTRUM_CACHE_VERSION = 2
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+LYRIC_MARKER = re.compile(
+    r"^[~*_\-\[\]{}()<>「」『』【】〔〕·•.,!?！？:：]*(?:间奏|間奏|instrumental|interlude|music)"
+    r"[~*_\-\[\]{}()<>「」『』【】〔〕·•.,!?！？:：]*$",
+    re.IGNORECASE,
+)
 RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
 LYRIC_MODES = {"original", "translation", "romanization"}
 LYRIC_HIGHLIGHT_MODES = {"line", "sweep"}
@@ -1161,8 +1166,14 @@ class VideoJobManager:
             )
             project = VideoProject.load(self.output_root, song_id)
             if options.alignment_mode == "model":
+                # Preparation deliberately does not consume the user-visible
+                # render progress bar.  Keep the diagnostic stage/sentence
+                # message in memory only: lyric-align emits one callback per
+                # sentence, but these callbacks are not resume checkpoints and
+                # must not cause repeated writes to video_jobs.json.
+
                 def prep_progress(stage: str, fraction: float, message: str) -> None:
-                    self._update(job_id, progress=0, message=f"预处理 · {message}")
+                    self._update_runtime(job_id, progress=0, message=f"预处理 · {message}")
                 self._update(job_id, message="预处理歌词与音频", progress=0)
                 _prepare_model_alignment(project, options, prep_progress)
                 project = VideoProject.load(self.output_root, song_id)
@@ -1172,8 +1183,11 @@ class VideoJobManager:
             destination = project.directory / f"ktv_{options.resolution}_{fingerprint}.mp4"
 
             def on_progress(done: int, total: int) -> None:
-                percent = 70 + round(done / total * 29) if options.alignment_mode == "model" else round(done / total * 98)
-                self._update(job_id, progress=min(99, max(2, percent)), message=f"正在渲染 {done}/{total} 帧")
+                # The progress bar represents video rendering only.  Model
+                # preprocessing remains at 0%, then rendering spans the full
+                # 0–99% range just like the traditional path.
+                percent = round(done / total * 99)
+                self._update(job_id, progress=min(99, max(0, percent)), message=f"正在渲染 {done}/{total} 帧")
 
             result = render_video(project, options, destination, on_progress)
             self._update(
@@ -1204,6 +1218,19 @@ class VideoJobManager:
             job.update(values)
             self._prune_terminal_jobs_locked()
             self._save_state_locked()
+
+    def _update_runtime(self, job_id: str, **values: Any) -> None:
+        """Update an active job for polling without journaling the change.
+
+        Preparation callbacks are intentionally ephemeral.  They provide a
+        useful live message (including CTC's sentence counter), but do not
+        represent a resumable checkpoint and therefore should not rewrite the
+        persistent queue journal for every aligned sentence.
+        """
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job is not None:
+                job.update(values)
 
     def _position_locked(self, job_id: str) -> int:
         position = 0
@@ -1577,10 +1604,12 @@ def _is_display_lyric(line: dict[str, Any]) -> bool:
     text = str(line.get("text") or "").strip()
     if not text:
         return False
-    normalized = text.casefold().replace(" ", "")
-    if normalized in {"间奏", "間奏", "instrumental"}:
-        return False
-    if "music" in normalized and len(normalized) <= 24:
+    # Only remove explicit interlude/metadata markers.  The old substring
+    # rule (`music` anywhere in a short line) could discard real lyrics such
+    # as "music to me".  Wrapper punctuation is accepted for common forms
+    # like `~music~` without treating ordinary prose as a marker.
+    normalized = re.sub(r"\s+", "", text.casefold())
+    if LYRIC_MARKER.fullmatch(normalized):
         return False
     return True
 

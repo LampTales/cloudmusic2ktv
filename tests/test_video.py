@@ -222,6 +222,25 @@ def test_project_ignores_blank_and_music_marker_lines(tmp_path):
     assert [line["text"] for line in project.timeline] == ["真正的歌词"]
 
 
+def test_project_keeps_lyrics_that_only_mention_music(tmp_path):
+    directory = tmp_path / "123_artist_title"
+    directory.mkdir()
+    (directory / "metadata.json").write_text(json.dumps({"duration_ms": 10000}), encoding="utf-8")
+    (directory / "lyrics_timeline.json").write_text(
+        json.dumps(
+            [
+                {"start_ms": 1000, "end_ms": 3000, "text": "music to me"},
+                {"start_ms": 4000, "end_ms": 6000, "text": "[interlude]"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (directory / "audio.mp3").write_bytes(b"ID3")
+    Image.new("RGB", (100, 100)).save(directory / "cover.jpg")
+    project = VideoProject.load(tmp_path, 123)
+    assert [line["text"] for line in project.timeline] == ["music to me"]
+
+
 def test_background_job_reports_completion(monkeypatch, tmp_path):
     project = make_project(tmp_path / "project")
     monkeypatch.setattr(VideoProject, "load", classmethod(lambda cls, root, song_id: project))
