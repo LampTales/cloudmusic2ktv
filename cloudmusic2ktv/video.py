@@ -34,6 +34,11 @@ MODEL_INTERLUDE_THRESHOLD_MS = MODEL_INTERLUDE_HOLD_MS + MODEL_INTERLUDE_BLANK_M
 MAX_INTERLUDE_SWEEP_MS = 8_000
 COUNTDOWN_TOP = 720
 SPECTRUM_CACHE_VERSION = 2
+# Short CTC gaps are often frame-boundary artifacts rather than intentional
+# pauses.  Model sweep rendering bridges gaps up to this threshold.  Keep the
+# policy in the renderer (the alignment artifact remains unchanged); operators
+# can tune it without exposing another front-end control.
+MODEL_SWEEP_GAP_THRESHOLD_MS = 100
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 LYRIC_MARKER = re.compile(
     r"^[~*_\-\[\]{}()<>「」『』【】〔〕·•.,!?！？:：]*(?:间奏|間奏|instrumental|interlude|music)"
@@ -42,7 +47,7 @@ LYRIC_MARKER = re.compile(
 )
 RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
 LYRIC_MODES = {"original", "translation", "romanization"}
-LYRIC_HIGHLIGHT_MODES = {"line", "sweep"}
+LYRIC_HIGHLIGHT_MODES = {"line", "sweep", "smooth"}
 ALIGNMENT_MODES = {"legacy", "model"}
 PRONUNCIATION_MODES = {"none", "kana", "romaji"}
 AUDIO_MODES = {"original", "instrumental"}
@@ -111,6 +116,8 @@ class VideoOptions:
             raise VideoError("发音标注需要使用模型对齐模式")
         if self.alignment_mode != "model" and self.audio_mode == "instrumental":
             raise VideoError("纯伴奏需要使用模型对齐模式")
+        if self.alignment_mode != "model" and self.lyric_highlight_mode == "smooth":
+            raise VideoError("平滑扫色需要使用模型对齐模式")
         if self.lyric_mode not in LYRIC_MODES:
             raise VideoError("不支持的歌词显示模式")
         if self.lyric_highlight_mode not in LYRIC_HIGHLIGHT_MODES:
@@ -231,6 +238,8 @@ class FrameRenderer:
         self.static_main = self._make_static_main()
         self.spectrum = spectrum
         self.timeline = self._timeline_for_options()
+        if options.alignment_mode == "model" and options.lyric_highlight_mode == "smooth":
+            self.timeline = self._smooth_model_sweep_timeline(self.timeline)
         if options.alignment_mode == "model" and self.timeline:
             self.pre_roll_ms = int(OPENING_SECONDS * 1000) if options.opening and int(self.timeline[0].get("start_ms", 0)) < int(OPENING_SECONDS * 1000) else 0
         else:
@@ -261,6 +270,61 @@ class FrameRenderer:
             item.setdefault("display_units", [])
             result.append(item)
         return result or self.project.timeline
+
+    @staticmethod
+    def _sweep_gap_threshold_ms() -> int:
+        """Return the renderer-only short-gap smoothing threshold.
+
+        This is intentionally an environment-level tuning knob rather than a
+        request/front-end option.  Invalid or negative values fall back to the
+        conservative default.
+        """
+        value = os.environ.get("CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS", "").strip()
+        if not value:
+            return MODEL_SWEEP_GAP_THRESHOLD_MS
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return MODEL_SWEEP_GAP_THRESHOLD_MS
+
+    @classmethod
+    def _smooth_model_sweep_timeline(cls, timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Bridge short visible-character gaps for model sweep rendering.
+
+        ``alignment.json`` is the source of truth and is never modified.  A
+        private copy of its display units is adjusted only when two adjacent
+        non-whitespace characters have a positive gap no larger than the
+        configured threshold.  The gap is split at its midpoint, preserving
+        the original ordering while removing a visible pause.  Explicit
+        whitespace units and longer gaps remain untouched.
+        """
+        threshold = cls._sweep_gap_threshold_ms()
+        if threshold <= 0:
+            return timeline
+        smoothed: list[dict[str, Any]] = []
+        for line in timeline:
+            units = line.get("display_units")
+            if not isinstance(units, list) or len(units) < 2:
+                smoothed.append(line)
+                continue
+            copied = dict(line)
+            copied_units = [dict(unit) for unit in units if isinstance(unit, dict)]
+            if len(copied_units) < 2:
+                smoothed.append(copied)
+                continue
+            for left, right in zip(copied_units, copied_units[1:]):
+                if not str(left.get("text") or "").strip() or not str(right.get("text") or "").strip():
+                    continue
+                left_end = int(left.get("end_ms", left.get("start_ms", 0)))
+                right_start = int(right.get("start_ms", left_end))
+                gap = right_start - left_end
+                if 0 < gap <= threshold:
+                    boundary = left_end + gap // 2
+                    left["end_ms"] = boundary
+                    right["start_ms"] = boundary
+            copied["display_units"] = copied_units
+            smoothed.append(copied)
+        return smoothed
 
     def representative_time_ms(self) -> int:
         if not self.timeline:
@@ -516,7 +580,7 @@ class FrameRenderer:
             self._draw_countdown(frame, state["remaining"])
             return
         progress = state["progress"] if self.options.lyric_highlight_mode == "sweep" else 1.0
-        if self.options.alignment_mode == "model" and self.options.lyric_highlight_mode == "sweep":
+        if self.options.alignment_mode == "model" and self.options.lyric_highlight_mode in {"sweep", "smooth"}:
             progress = self._model_progress(state["index"], song_time_ms)
         self._draw_lyric_pair(frame, state["index"], progress)
 
@@ -624,7 +688,7 @@ class FrameRenderer:
         font = self._fit_font(text, self._font(60, bold=True, text=text), max_width, 60, bold=True, minimum=36)
         inactive = (236, 238, 241)
         align_left = row == 0
-        if self.options.alignment_mode == "model" and self.options.lyric_highlight_mode == "sweep" and (line.get("display_units") or line.get("tokens") or line.get("mora")) and progress is not None:
+        if self.options.alignment_mode == "model" and self.options.lyric_highlight_mode in {"sweep", "smooth"} and (line.get("display_units") or line.get("tokens") or line.get("mora")) and progress is not None:
             self._draw_model_wipe_text(frame, text, y, font, align_left, inactive, line)
         else:
             self._draw_wipe_text(frame, text, y, font, align_left, inactive, progress)
@@ -1144,7 +1208,10 @@ class VideoJobManager:
             )[:10]
             return {
                 "current": self._public_job(current) if current else None,
-                "queued_count": len(waiting_jobs),
+                # The user-facing queue count includes the current task.  A
+                # total active count is easier to understand than reporting
+                # only the number waiting behind it.
+                "queued_count": len(active),
                 "queued": queued,
                 "recent": self._public_job(recent) if recent else None,
                 "completed": [self._public_job(job) for job in completed],

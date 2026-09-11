@@ -52,8 +52,11 @@ def test_video_options_excludes_overloaded_three_language_mode():
 def test_lyric_highlight_defaults_to_whole_line_and_validates_modes():
     assert VideoOptions.from_mapping({}).lyric_highlight_mode == "line"
     assert VideoOptions.from_mapping({"lyric_highlight_mode": "sweep"}).lyric_highlight_mode == "sweep"
+    assert VideoOptions.from_mapping({"alignment_mode": "model", "lyric_highlight_mode": "smooth"}).lyric_highlight_mode == "smooth"
     with pytest.raises(VideoError):
         VideoOptions.from_mapping({"lyric_highlight_mode": "word"})
+    with pytest.raises(VideoError):
+        VideoOptions.from_mapping({"lyric_highlight_mode": "smooth"})
 
 
 def test_lyric_highlight_mode_changes_option_fingerprint():
@@ -153,6 +156,77 @@ def test_active_lyric_is_whole_line_or_uniform_sweep(tmp_path):
 
     assert whole_line_progress == [1.0]
     assert sweep_progress == [0.5]
+
+
+def test_model_sweep_bridges_only_short_visible_character_gaps(monkeypatch, tmp_path):
+    project = make_project(tmp_path / "project")
+    units = [
+        {"text": "甲", "start_ms": 1000, "end_ms": 1100},
+        {"text": "乙", "start_ms": 1150, "end_ms": 1250},  # 50 ms gap: bridge
+        {"text": " ", "start_ms": 1300, "end_ms": 1320},  # explicit space: preserve
+        {"text": "丙", "start_ms": 1400, "end_ms": 1500},
+        {"text": "丁", "start_ms": 1700, "end_ms": 1800},  # 200 ms: preserve
+    ]
+    project = VideoProject(
+        **{
+            **project.__dict__,
+            "alignment": {
+                "lines": [
+                    {
+                        "source_index": 0,
+                        "text": "甲乙 丙丁",
+                        "start_ms": 1000,
+                        "end_ms": 2000,
+                        "display_units": units,
+                    }
+                ]
+            },
+        }
+    )
+    monkeypatch.delenv("CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS", raising=False)
+    renderer = FrameRenderer(
+        project,
+        VideoOptions(alignment_mode="model", lyric_highlight_mode="smooth", spectrum=False),
+    )
+    smoothed = renderer.timeline[0]["display_units"]
+    assert smoothed[0]["end_ms"] == smoothed[1]["start_ms"] == 1125
+    assert smoothed[1]["end_ms"] == 1250
+    assert smoothed[2]["start_ms"] == 1300
+    assert smoothed[3]["start_ms"] == 1400
+    assert smoothed[4]["start_ms"] == 1700
+    # Rendering must not mutate the alignment artifact supplied by the caller.
+    assert units[0]["end_ms"] == 1100
+    assert units[1]["start_ms"] == 1150
+
+
+def test_model_sweep_gap_threshold_is_operator_configurable(monkeypatch, tmp_path):
+    project = make_project(tmp_path / "project")
+    project = VideoProject(
+        **{
+            **project.__dict__,
+            "alignment": {
+                "lines": [
+                    {
+                        "source_index": 0,
+                        "text": "甲乙",
+                        "start_ms": 1000,
+                        "end_ms": 2000,
+                        "display_units": [
+                            {"text": "甲", "start_ms": 1000, "end_ms": 1100},
+                            {"text": "乙", "start_ms": 1250, "end_ms": 1350},
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+    monkeypatch.setenv("CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS", "200")
+    renderer = FrameRenderer(
+        project,
+        VideoOptions(alignment_mode="model", lyric_highlight_mode="smooth", spectrum=False),
+    )
+    assert renderer.timeline[0]["display_units"][0]["end_ms"] == 1175
+    assert renderer.timeline[0]["display_units"][1]["start_ms"] == 1175
 
 
 def test_countdown_is_above_left_top_lyric(tmp_path):
@@ -336,7 +410,7 @@ def test_background_job_reports_completion(monkeypatch, tmp_path):
     assert completed[0]["song"]["album"] == project.song["album"]
 
 
-def test_queue_deduplicates_active_options_and_reports_waiting_count(monkeypatch, tmp_path):
+def test_queue_deduplicates_active_options_and_reports_total_active_count(monkeypatch, tmp_path):
     project = make_project(tmp_path / "project")
     monkeypatch.setattr(VideoProject, "load", classmethod(lambda cls, root, song_id: project))
     started = threading.Event()
@@ -367,7 +441,7 @@ def test_queue_deduplicates_active_options_and_reports_waiting_count(monkeypatch
     assert duplicate["deduplicated"] is True
     assert waiting["position"] == 1
     queue = manager.queue_status()
-    assert queue["queued_count"] == 1
+    assert queue["queued_count"] == 2
     assert queue["queued"][0]["id"] == waiting["id"]
     assert queue["queued"][0]["position"] == 1
     assert queue["queued"][0]["song"]["name"] == project.song["name"]

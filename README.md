@@ -426,6 +426,9 @@ LYRIC_DEMUCS_MODEL_PATH=/models/htdemucs
 LYRIC_CTC_MODEL_PATH=/models/wav2vec2-japanese
 LYRIC_DEVICE=cpu                 # 或 cuda
 LYRIC_G2P_BACKEND=sudachi       # sudachi/openjtalk/pykakasi
+# Model sweep rendering bridges short gaps between adjacent visible characters.
+# This backend-only tuning value is not exposed in the web UI (default: 100 ms).
+CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS=100
 # 如果不是以 pip 安装，可指向 lyric_align/src
 LYRIC_ALIGN_PATH=/opt/lyric_align/src
 ```

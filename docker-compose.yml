@@ -17,6 +17,8 @@ services:
       LYRIC_CTC_MODEL_PATH: ${LYRIC_CTC_MODEL_PATH:-}
       LYRIC_DEVICE: ${LYRIC_DEVICE:-cpu}
       LYRIC_G2P_BACKEND: ${LYRIC_G2P_BACKEND:-sudachi}
+      # Renderer-only smoothing for short gaps in model sweep highlighting.
+      CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS: ${CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS:-100}
     volumes:
       - ./docker-data/instance:/app/instance
       - ./docker-data/outputs:/app/outputs

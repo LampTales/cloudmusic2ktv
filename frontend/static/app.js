@@ -41,6 +41,10 @@ const PLAYLIST_TRACK_PAGE_SIZE = 50;
 let playlistTrackRequest = 0;
 let playlistTrackQuery = "";
 let playlistTrackSearchTimer = null;
+const alignmentModeSelections = {
+  legacy: {lyric: "original", highlight: "line"},
+  model: {lyric: "kana", highlight: "smooth"},
+};
 const API_ORIGIN = String(window.CLOUDMUSIC2KTV_API_ORIGIN || "").replace(/\/+$/, "");
 const APP_BASE_PATH = String(
   window.CLOUDMUSIC2KTV_BASE_PATH || inferBasePath()
@@ -183,12 +187,6 @@ function setResponsiveButtonLabel(button, desktop, mobile) {
   if (button.dataset.busy !== "1") button.textContent = button.dataset.label;
 }
 
-function setResponsiveOptionLabel(select, value, desktop, mobile) {
-  if (!select) return;
-  const option = Array.from(select.options).find(item => item.value === value);
-  if (option) option.textContent = responsiveButtonLabel(desktop, mobile);
-}
-
 function updateResponsiveLabels() {
   const ready = selectedSongLocal.ready;
   setResponsiveButtonLabel(
@@ -197,7 +195,6 @@ function updateResponsiveLabels() {
     ready ? "重新下载" : "下载素材",
   );
   setResponsiveButtonLabel($("#refreshPreview"), "更新预览", "更新");
-  setResponsiveOptionLabel($("#lyricHighlightMode"), "line", "整句点亮（不扫色）", "整句点亮");
 }
 
 async function ensureCookieCsrf() {
@@ -1637,6 +1634,33 @@ function videoOptions() {
 function updateConditionalOptions() {
   const background = $("#backgroundMode").value;
   const model = $("#alignmentMode")?.value === "model";
+  const modeBadge = $("#alignmentModeBadge");
+  if (modeBadge) {
+    modeBadge.textContent = model ? "Beta" : "普通";
+    modeBadge.classList.toggle("normal", !model);
+    modeBadge.classList.toggle("beta", model);
+    modeBadge.setAttribute("aria-label", model
+      ? "当前为 Beta 模式，点击切换到普通模式"
+      : "当前为普通模式，点击切换到 Beta 模式");
+  }
+  if ($("#optionsModeHint")) {
+    $("#optionsModeHint").textContent = model ? "仅支持日语，耗时长" : "点击切换自动标注";
+  }
+  const commonOptions = $(".option-grid");
+  const advancedOptions = $("#advancedSelectGrid");
+  const moveControls = (container, selectors) => {
+    if (!container) return;
+    for (const selector of selectors) {
+      const control = $(selector);
+      if (control) container.append(control);
+    }
+  };
+  if (model) {
+    moveControls(advancedOptions, ["#backgroundModeControl", "#backgroundColorWrap", "#customBackgroundWrap"]);
+    moveControls(commonOptions, ["#audioModeControl", "#lyricModeControl", "#highlightModeControl", "#accentModeControl", "#accentColorWrap"]);
+  } else {
+    moveControls(commonOptions, ["#backgroundModeControl", "#backgroundColorWrap", "#customBackgroundWrap", "#lyricModeControl", "#highlightModeControl", "#accentModeControl", "#accentColorWrap", "#audioModeControl"]);
+  }
   $("#backgroundColorWrap").classList.toggle("hidden", background !== "solid");
   $("#customBackgroundWrap").classList.toggle("hidden", background !== "custom");
   $("#accentColorWrap").classList.toggle("hidden", $("#accentMode").value !== "custom");
@@ -1645,11 +1669,22 @@ function updateConditionalOptions() {
   const lyricMode = $("#lyricMode");
   const selectedBefore = lyricMode?.value || "original";
   if (lyricMode) {
+    const labels = model
+      ? {kana: "标注假名", romanization: "标注罗马音", original: "仅原文"}
+      : {original: "仅原文", translation: "原文 + 翻译", romanization: "原文 + 罗马音"};
+    const order = model
+      ? ["kana", "romanization", "original", "translation"]
+      : ["original", "translation", "romanization", "kana"];
+    for (const value of order) {
+      const option = Array.from(lyricMode.options).find(item => item.value === value);
+      if (option) lyricMode.append(option);
+    }
     for (const option of lyricMode.options) {
-      option.hidden = model ? option.value === "translation" : option.value === "kana";
+      option.hidden = !(option.value in labels);
+      if (labels[option.value]) option.textContent = labels[option.value];
     }
     const allowed = model ? new Set(["original", "kana", "romanization"]) : new Set(["original", "translation", "romanization"]);
-    if (!allowed.has(selectedBefore)) lyricMode.value = "original";
+    if (!allowed.has(selectedBefore)) lyricMode.value = model ? "kana" : "original";
   }
   // Keep the old pronunciation selector available for backwards-compatible
   // markup/API clients, but hide it from the model UI where lyricMode is the
@@ -1664,10 +1699,36 @@ function updateConditionalOptions() {
     $("#audioMode").disabled = !model;
     if (!model) $("#audioMode").value = "original";
   }
-  if ($("#lyricHighlightMode") && model && $("#lyricHighlightMode").value === "line") {
-    // Model alignment is intended for timing-aware karaoke; leave the user
-    // free to choose whole-line highlighting, but expose the accurate option.
+  $("#audioModeControl")?.classList.toggle("hidden", !model);
+  const highlightMode = $("#lyricHighlightMode");
+  if (highlightMode) {
+    const labels = model
+      ? {smooth: "平滑", sweep: "精确", line: "不扫色"}
+      : {sweep: "匀速", line: "不扫色"};
+    const order = model ? ["smooth", "sweep", "line"] : ["line", "sweep", "smooth"];
+    for (const value of order) {
+      const option = Array.from(highlightMode.options).find(item => item.value === value);
+      if (!option) continue;
+      highlightMode.append(option);
+      option.hidden = !(value in labels);
+      if (labels[value]) option.textContent = labels[value];
+    }
+    if (!model && highlightMode.value === "smooth") highlightMode.value = "line";
   }
+}
+
+function selectAlignmentMode(mode) {
+  const select = $("#alignmentMode");
+  if (!select || select.value === mode) return;
+  alignmentModeSelections[select.value] = {
+    lyric: $("#lyricMode")?.value || "original",
+    highlight: $("#lyricHighlightMode")?.value || "line",
+  };
+  select.value = mode;
+  const selections = alignmentModeSelections[mode];
+  if ($("#lyricMode")) $("#lyricMode").value = selections.lyric;
+  if ($("#lyricHighlightMode")) $("#lyricHighlightMode").value = selections.highlight;
+  select.dispatchEvent(new Event("change", {bubbles: true}));
 }
 
 function schedulePreview(silent = false) {
@@ -1679,13 +1740,14 @@ function schedulePreview(silent = false) {
 async function refreshVideoPreview(silent = false) {
   if (!selectedSong || !selectedSongLocal.ready) return;
   const requestNumber = ++previewRequest;
+  const requestedOptions = videoOptions();
   const button = $("#refreshPreview");
   busy(button, true, "生成中…");
   $("#previewPlaceholder").textContent = "正在渲染实际画面…";
   try {
     const data = await api("/api/video/preview", {
       method: "POST",
-      body: JSON.stringify({song: selectedSong.id, options: videoOptions()}),
+      body: JSON.stringify({song: selectedSong.id, options: requestedOptions}),
     });
     if (requestNumber !== previewRequest) return;
     const image = $("#videoPreviewImage");
@@ -1693,10 +1755,11 @@ async function refreshVideoPreview(silent = false) {
     image.style.display = "block";
     $("#previewPlaceholder").classList.add("hidden");
     const preRoll = data.preview.pre_roll_ms ? ` · 含 ${data.preview.pre_roll_ms / 1000} 秒开场预卷` : "";
-    const actualModel = data.preview.alignment_mode === "model";
-    const highlight = ($("#lyricHighlightMode")?.value || "line") === "sweep" ? (actualModel ? "按实际时长扫色" : "匀速扫色") : "整句点亮";
-    const alignment = actualModel ? "模型对齐" : "传统对齐";
-    const fallback = data.preview.model_fallback ? " · 提交后排队生成模型数据" : "";
+    const requestedModel = requestedOptions.alignment_mode === "model";
+    const highlightMode = requestedOptions.lyric_highlight_mode || "line";
+    const highlight = highlightMode === "smooth" ? "平滑" : highlightMode === "sweep" ? (requestedModel ? "精确" : "匀速") : "不扫色";
+    const alignment = requestedModel ? "Beta" : "普通";
+    const fallback = data.preview.model_fallback ? " · 正式生成时自动标注" : "";
     $("#previewMeta").textContent = `${data.preview.width} × ${data.preview.height} · ${alignment} · ${highlight} · 点亮颜色 ${data.preview.accent}${preRoll}${fallback}`;
   } catch (error) {
     if (requestNumber !== previewRequest) return;
@@ -1721,6 +1784,10 @@ for (const element of document.querySelectorAll("#videoBuilder select, #videoBui
     schedulePreview(false);
   });
 }
+
+$("#alignmentModeBadge")?.addEventListener("click", () => {
+  selectAlignmentMode($("#alignmentMode")?.value === "model" ? "legacy" : "model");
+});
 
 $("#customBackground").addEventListener("change", async (event) => {
   if (!selectedSong || !selectedSongLocal.ready || !event.currentTarget.files.length) {

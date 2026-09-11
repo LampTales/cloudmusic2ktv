@@ -17,9 +17,9 @@
       </a>
       <nav class="page-nav" aria-label="页面导航">
         <a class="active" href="#finder">检索歌曲</a>
+        <a href="#playlists">我的歌单</a>
         <a href="#songPreview">当前歌曲</a>
         <a href="#videoBuilder">视频制作</a>
-        <a href="#playlists">我的歌单</a>
       </nav>
       <button id="accountPill" class="account-pill" type="button" aria-haspopup="dialog">
         <span class="dot"></span><span>检查登录状态…</span>
@@ -229,24 +229,25 @@
 
         <div class="video-options">
           <div class="options-heading">
-            <strong>画面设置</strong>
-            <span>修改后自动更新预览</span>
+            <div class="options-title-row">
+              <strong>画面设置</strong>
+              <button id="alignmentModeBadge" class="alignment-mode-badge normal" type="button" aria-label="当前为普通模式，点击切换到 Beta 模式">普通</button>
+            </div>
+            <span id="optionsModeHint">点击切换自动标注</span>
           </div>
+          <select id="alignmentMode" class="hidden" aria-hidden="true" tabindex="-1">
+            <option value="legacy">普通模式</option>
+            <option value="model">Beta</option>
+          </select>
           <div class="option-grid">
-            <label>歌词对齐
-              <select id="alignmentMode">
-                <option value="legacy">传统句级</option>
-                <option value="model">实验性模型预处理</option>
-              </select>
-            </label>
-            <label id="pronunciationControl">发音标注
+            <label id="pronunciationControl" class="hidden">发音标注
               <select id="pronunciationMode">
                 <option value="none">不显示</option>
                 <option value="kana">汉字上方显示假名</option>
                 <option value="romaji">字符上方显示罗马音</option>
               </select>
             </label>
-            <label>音频
+            <label id="audioModeControl" class="hidden">音频
               <select id="audioMode">
                 <option value="original">原唱</option>
                 <option value="instrumental">纯伴奏</option>
@@ -254,37 +255,24 @@
             </label>
             <label id="lyricModeControl">歌词显示
               <select id="lyricMode">
-                <option value="original">仅原文</option>
+                <option value="kana">标注假名</option>
+                <option value="romanization">标注罗马音</option>
+                <option value="original" selected>仅原文</option>
                 <option value="translation">原文 + 翻译</option>
-                <option value="romanization">原文 + 罗马音</option>
-                <option value="kana">汉字上方显示假名</option>
               </select>
             </label>
-            <label>背景
-              <select id="backgroundMode">
-                <option value="blur">封面模糊并压暗</option>
-                <option value="gradient">封面色渐变</option>
-                <option value="solid">纯色背景</option>
-                <option value="custom">自定义图片</option>
-              </select>
-            </label>
-            <label id="backgroundColorWrap" class="hidden">背景颜色
-              <input id="backgroundColor" type="color" value="#171b26">
-            </label>
-            <label id="customBackgroundWrap" class="hidden">背景图片
-              <input id="customBackground" type="file" accept="image/png,image/jpeg,image/webp">
-            </label>
-            <label>点亮颜色
+            <label id="accentModeControl">点亮颜色
               <select id="accentMode">
                 <option value="blue">默认蓝色</option>
                 <option value="cover">自动匹配封面</option>
                 <option value="custom">自定义颜色</option>
               </select>
             </label>
-            <label>扫色方式
+            <label id="highlightModeControl">扫色方式
               <select id="lyricHighlightMode">
-                <option value="line">整句点亮（不扫色）</option>
-                <option value="sweep">匀速扫色</option>
+                <option value="line" selected>不扫色</option>
+                <option value="smooth">平滑</option>
+                <option value="sweep">精确</option>
               </select>
             </label>
             <label id="accentColorWrap" class="hidden">自定义点亮颜色
@@ -295,7 +283,21 @@
           <details class="advanced-options">
             <summary>高级设置</summary>
             <div class="advanced-content">
-              <div class="advanced-select-grid">
+              <div id="advancedSelectGrid" class="advanced-select-grid">
+                <label id="backgroundModeControl">背景
+                  <select id="backgroundMode">
+                    <option value="blur">封面模糊并压暗</option>
+                    <option value="gradient">封面色渐变</option>
+                    <option value="solid">纯色背景</option>
+                    <option value="custom">自定义图片</option>
+                  </select>
+                </label>
+                <label id="backgroundColorWrap" class="hidden">背景颜色
+                  <input id="backgroundColor" type="color" value="#171b26">
+                </label>
+                <label id="customBackgroundWrap" class="hidden">背景图片
+                  <input id="customBackground" type="file" accept="image/png,image/jpeg,image/webp">
+                </label>
                 <label>分辨率
                   <select id="videoResolution">
                     <option value="1080p">1920 × 1080</option>

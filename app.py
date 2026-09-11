@@ -863,6 +863,11 @@ def video_preview() -> Any:
             audio_mode="original",
             lyric_mode="original",
         )
+        # Smooth sweep depends on model display units.  Until preprocessing
+        # completes, render the cheap legacy preview with ordinary sweep
+        # timing; the queued model render will apply smoothing afterward.
+        if fallback_values.get("lyric_highlight_mode") == "smooth":
+            fallback_values["lyric_highlight_mode"] = "sweep"
         options = VideoOptions.from_mapping(fallback_values)
     fingerprint = video_options_fingerprint(options)
     destination = project.directory / f"video_preview_{fingerprint}.png"

@@ -162,7 +162,7 @@ def test_model_preview_without_alignment_falls_back_without_preprocessing(monkey
                 "pronunciation_mode": "kana",
                 "audio_mode": "instrumental",
                 "lyric_mode": "translation",
-                "lyric_highlight_mode": "sweep",
+                "lyric_highlight_mode": "smooth",
             },
         },
     )
@@ -172,6 +172,7 @@ def test_model_preview_without_alignment_falls_back_without_preprocessing(monkey
     assert seen["options"].pronunciation_mode == "none"
     assert seen["options"].audio_mode == "original"
     assert seen["options"].lyric_mode == "original"
+    assert seen["options"].lyric_highlight_mode == "sweep"
     assert response.get_json()["preview"]["model_fallback"] is True
 
 
