@@ -90,7 +90,9 @@ def test_playlist_page_has_a_separate_navigation_view():
     nav = page.split('<nav class="page-nav"', 1)[1].split("</nav>", 1)[0]
     assert nav.count("<a ") == 4
     assert '<a href="#playlists">我的歌单</a>' in page
-    assert nav.index('href="#videoBuilder"') < nav.index('href="#playlists"')
+    assert nav.index('href="#finder"') < nav.index('href="#playlists"')
+    assert nav.index('href="#playlists"') < nav.index('href="#songPreview"')
+    assert nav.index('href="#songPreview"') < nav.index('href="#videoBuilder"')
     assert 'id="playlistLayout" class="playlist-layout"' in page
     playlist_info = page.split('<div class="playlist-info">', 1)[1].split('</div>\n            </div>', 1)[0]
     assert 'id="playlistTrackSearch"' in playlist_info
@@ -200,14 +202,63 @@ def test_highlight_mode_is_primary_and_resolution_is_advanced():
     advanced = page.index('<details class="advanced-options">')
     resolution = page.index('id="videoResolution"')
     assert highlight < advanced < resolution
-    assert '<div class="advanced-select-grid">' in page
+    assert 'id="advancedSelectGrid" class="advanced-select-grid"' in page
     assert ".advanced-select-grid { display: grid; grid-template-columns: 1fr 1fr;" in (
         FRONTEND_ROOT / "static" / "app.css"
     ).read_text(encoding="utf-8")
-    assert '<option value="line">整句点亮（不扫色）</option>' in page
-    assert '<option value="sweep">匀速扫色</option>' in page
+    highlight_options = page.split('<select id="lyricHighlightMode">', 1)[1].split("</select>", 1)[0]
+    assert highlight_options.index('value="line"') < highlight_options.index('value="smooth"') < highlight_options.index('value="sweep"')
+    assert '<option value="line" selected>不扫色</option>' in highlight_options
+    assert '<option value="smooth">平滑</option>' in highlight_options
+    assert '<option value="sweep">精确</option>' in highlight_options
     assert 'const lyricHighlightMode = $("#lyricHighlightMode")?.value || "line"' in script
     assert "lyric_highlight_mode: lyricHighlightMode" in script
+
+
+def test_alignment_mode_is_a_mobile_friendly_heading_switch():
+    page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    css = (FRONTEND_ROOT / "static" / "app.css").read_text(encoding="utf-8")
+
+    heading = page.split('<div class="options-heading">', 1)[1].split("</div>\n          </div>", 1)[0]
+    assert 'id="alignmentModeBadge"' in heading
+    assert '>普通</button>' in heading
+    assert '<select id="alignmentMode" class="hidden"' in page
+    assert '? "当前为 Beta 模式，点击切换到普通模式"' in script
+    assert ': "当前为普通模式，点击切换到 Beta 模式"' in script
+    assert '.alignment-mode-badge.normal { color: #257b50;' in css
+    assert '.alignment-mode-badge.beta { color: var(--red);' in css
+    assert '.alignment-mode-badge::before { content: ""; position: absolute; inset: -7px; }' in css
+
+
+def test_mode_specific_common_video_options_are_compact_and_ordered():
+    page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    common = page.split('<div class="option-grid">', 1)[1].split('<details class="advanced-options">', 1)[0]
+    advanced = page.split('<details class="advanced-options">', 1)[1]
+    assert 'id="audioModeControl" class="hidden"' in common
+    assert 'id="backgroundMode"' not in common
+    assert 'id="backgroundMode"' in advanced
+    assert 'model: {lyric: "kana", highlight: "smooth"}' in script
+    assert '? ["kana", "romanization", "original", "translation"]' in script
+    assert '? {smooth: "平滑", sweep: "精确", line: "不扫色"}' in script
+    assert 'const order = model ? ["smooth", "sweep", "line"] : ["line", "sweep", "smooth"]' in script
+    assert '$("#audioModeControl")?.classList.toggle("hidden", !model)' in script
+    assert 'moveControls(advancedOptions, ["#backgroundModeControl"' in script
+    assert 'moveControls(commonOptions, ["#backgroundModeControl", "#backgroundColorWrap", "#customBackgroundWrap", "#lyricModeControl", "#highlightModeControl", "#accentModeControl"' in script
+    assert 'moveControls(commonOptions, ["#audioModeControl", "#lyricModeControl", "#highlightModeControl", "#accentModeControl"' in script
+    assert 'model ? "仅支持日语，耗时长" : "点击切换自动标注"' in script
+
+
+def test_preview_caption_describes_requested_beta_mode_during_fallback():
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "const requestedOptions = videoOptions()" in script
+    assert "requestedOptions.alignment_mode === \"model\"" in script
+    assert 'const alignment = requestedModel ? "Beta" : "普通"' in script
+    assert 'data.preview.model_fallback ? " · 正式生成时自动标注"' in script
+    assert "传统对齐" not in script
 
 
 def test_mobile_controls_use_two_columns_and_keep_action_labels_single_line():
@@ -221,7 +272,8 @@ def test_mobile_controls_use_two_columns_and_keep_action_labels_single_line():
     script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
     assert 'ready ? "重新下载" : "下载素材"' in script
     assert 'setResponsiveButtonLabel($("#refreshPreview"), "更新预览", "更新")' in script
-    assert 'setResponsiveOptionLabel($("#lyricHighlightMode"), "line", "整句点亮（不扫色）", "整句点亮")' in script
+    assert ".alignment-mode-badge { min-height: 26px; }" in css
+    assert ".options-heading span { color: #999; font-size: 11px; white-space: nowrap; }" in css
 
 
 def test_preview_media_cannot_expand_builder_columns():

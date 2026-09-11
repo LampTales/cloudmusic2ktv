@@ -1,3 +1,15 @@
+FROM python:3.11-slim-bookworm AS wheel-builder
+
+ENV PIP_NO_CACHE_DIR=1
+
+WORKDIR /build
+
+COPY requirements.txt requirements-model.txt constraints-model.txt ./
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential pkg-config libopus-dev \
+    && python -m pip wheel --wheel-dir /wheels -r requirements-model.txt \
+    && rm -rf /var/lib/apt/lists/* /root/.cache
+
 FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -14,7 +26,10 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY requirements.txt ./requirements.txt
-RUN python -m pip install -r requirements.txt
+COPY --from=wheel-builder /wheels /wheels
+RUN python -m pip install --no-index --find-links=/wheels -r requirements.txt 'lyric-align[models]' \
+    && python -c "import lyric_align; assert lyric_align.__version__ == '0.1.0'" \
+    && rm -rf /wheels
 
 COPY app.py ./app.py
 COPY cloudmusic2ktv ./cloudmusic2ktv

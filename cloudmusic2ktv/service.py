@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -47,9 +48,20 @@ def safe_filename(value: str, fallback: str = "song") -> str:
 
 
 class SongDownloadService:
-    def __init__(self, client: NeteaseClient, output_root: Path):
+    def __init__(
+        self,
+        client: NeteaseClient,
+        output_root: Path,
+        *,
+        video_jobs_state_path: Path | None = None,
+    ):
         self.client = client
         self.output_root = output_root
+        self.video_jobs_state_path = (
+            Path(video_jobs_state_path)
+            if video_jobs_state_path is not None
+            else Path(output_root).parent / "instance" / "video_jobs.json"
+        )
 
     def inspect(self, song_id: int) -> dict[str, Any]:
         local = load_local_song(self.output_root, song_id)
@@ -62,6 +74,7 @@ class SongDownloadService:
         return local_song_status(self.output_root, song_id, downloading=downloading)
 
     def download(self, song_id: int, level: str = "exhigh") -> dict[str, Any]:
+        self._assert_no_active_video_job(song_id)
         song = self.client.song_detail(song_id)
         lyrics = self.client.lyrics(song_id)
         audio = self.client.player_url(song_id, level=level)
@@ -73,6 +86,16 @@ class SongDownloadService:
 
         cover_path = self._download_cover(song, directory)
         audio_path = self._download_audio(audio, directory)
+        # A refreshed song may change container/cover type.  Keep only the
+        # files belonging to the newly downloaded source so local discovery
+        # cannot accidentally select an older copy.
+        for pattern, current in (("cover.*", cover_path), ("audio.*", audio_path)):
+            for old in directory.glob(pattern):
+                if old != current and old.is_file() and not old.name.endswith(".part"):
+                    try:
+                        old.unlink()
+                    except FileNotFoundError:
+                        pass
         timeline = build_timeline(lyrics)
         lyric_types = available_lyric_types(lyrics)
 
@@ -89,6 +112,10 @@ class SongDownloadService:
         self._write_text(
             directory / "lyrics_karaoke_raw.lrc", (lyrics.get("klyric") or {}).get("lyric", "")
         )
+        # Only invalidate derived files after all new source materials have
+        # been downloaded and written successfully.  A failed re-download
+        # therefore does not destroy the last usable generated video.
+        self._clear_generated_artifacts(song_id, directory)
 
         return {
             "song": public_song(song),
@@ -101,6 +128,58 @@ class SongDownloadService:
             "bitrate": audio.get("br"),
             "size": audio_path.stat().st_size,
         }
+
+    def _assert_no_active_video_job(self, song_id: int) -> None:
+        """Avoid deleting stems/alignment while a queued render uses them.
+
+        The video manager persists its small journal at
+        ``video_jobs_state_path``. This check complements the in-process
+        download lock and also protects a second backend thread/process from
+        clearing active artifacts.
+        """
+        # VideoJobManager persists its journal outside the media tree.  Keep
+        # this lightweight cross-component guard pointed at that same file;
+        # the app passes ``instance/`` separately, so derive it from the
+        # service's output root only for the conventional source-tree layout.
+        state_path = self.video_jobs_state_path
+        try:
+            value = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return
+        jobs = value.get("jobs") if isinstance(value, dict) else None
+        if not isinstance(jobs, dict):
+            return
+        for job in jobs.values():
+            try:
+                busy_song = int(job.get("song_id", -1)) if isinstance(job, dict) else -1
+            except (TypeError, ValueError):
+                continue
+            if busy_song == int(song_id) and job.get("status") in {"queued", "running"}:
+                raise NeteaseError("这首歌正在生成视频，请等待任务完成后再重新下载", code="song_busy")
+
+    def _clear_generated_artifacts(self, song_id: int, directory: Path) -> None:
+        """Remove old alignment, stems, previews and generated videos."""
+        directories = {Path(directory)}
+        directories.update(path for path in self.output_root.glob(f"{song_id}_*") if path.is_dir())
+        for target in directories:
+            for name in (
+                "alignment.json", "alignment.json.part", "preprocessing.json",
+                "preprocessing.json.part", "spectrum_30fps.npz", "custom_background.png",
+            ):
+                try:
+                    (target / name).unlink()
+                except FileNotFoundError:
+                    pass
+            stems = target / "stems"
+            if stems.is_dir():
+                shutil.rmtree(stems, ignore_errors=True)
+            for pattern in ("video_preview*.png", "ktv_*.mp4", "*.part", "*.source.wav"):
+                for artifact in target.glob(pattern):
+                    if artifact.is_file():
+                        try:
+                            artifact.unlink()
+                        except FileNotFoundError:
+                            pass
 
     def _download_cover(self, song: dict[str, Any], directory: Path) -> Path:
         url = song.get("cover_url")

@@ -28,13 +28,29 @@ OPENING_COVER_MOVE_RATIO = 0.58
 OPENING_DISC_START_RATIO = 0.62
 INTERLUDE_THRESHOLD_MS = 15_000
 INTERLUDE_COUNTDOWN_MS = 4_000
+MODEL_INTERLUDE_HOLD_MS = 4_000
+MODEL_INTERLUDE_BLANK_MS = 4_000
+MODEL_INTERLUDE_THRESHOLD_MS = MODEL_INTERLUDE_HOLD_MS + MODEL_INTERLUDE_BLANK_MS + INTERLUDE_COUNTDOWN_MS
 MAX_INTERLUDE_SWEEP_MS = 8_000
 COUNTDOWN_TOP = 720
 SPECTRUM_CACHE_VERSION = 2
+# Short CTC gaps are often frame-boundary artifacts rather than intentional
+# pauses.  Model sweep rendering bridges gaps up to this threshold.  Keep the
+# policy in the renderer (the alignment artifact remains unchanged); operators
+# can tune it without exposing another front-end control.
+MODEL_SWEEP_GAP_THRESHOLD_MS = 100
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+LYRIC_MARKER = re.compile(
+    r"^[~*_\-\[\]{}()<>「」『』【】〔〕·•.,!?！？:：]*(?:间奏|間奏|instrumental|interlude|music)"
+    r"[~*_\-\[\]{}()<>「」『』【】〔〕·•.,!?！？:：]*$",
+    re.IGNORECASE,
+)
 RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
 LYRIC_MODES = {"original", "translation", "romanization"}
-LYRIC_HIGHLIGHT_MODES = {"line", "sweep"}
+LYRIC_HIGHLIGHT_MODES = {"line", "sweep", "smooth"}
+ALIGNMENT_MODES = {"legacy", "model"}
+PRONUNCIATION_MODES = {"none", "kana", "romaji"}
+AUDIO_MODES = {"original", "instrumental"}
 BACKGROUND_MODES = {"blur", "gradient", "solid", "custom"}
 ACCENT_MODES = {"blue", "cover", "custom"}
 QUALITY_MAP = {
@@ -50,6 +66,9 @@ class VideoError(RuntimeError):
 
 @dataclass(frozen=True)
 class VideoOptions:
+    alignment_mode: str = "legacy"
+    pronunciation_mode: str = "none"
+    audio_mode: str = "original"
     lyric_mode: str = "original"
     lyric_highlight_mode: str = "line"
     background_mode: str = "blur"
@@ -67,6 +86,9 @@ class VideoOptions:
     def from_mapping(cls, value: dict[str, Any] | None) -> "VideoOptions":
         value = value or {}
         options = cls(
+            alignment_mode=str(value.get("alignment_mode") or "legacy"),
+            pronunciation_mode=str(value.get("pronunciation_mode") or "none"),
+            audio_mode=str(value.get("audio_mode") or "original"),
             lyric_mode=str(value.get("lyric_mode") or "original"),
             lyric_highlight_mode=str(value.get("lyric_highlight_mode") or "line"),
             background_mode=str(value.get("background_mode") or "blur"),
@@ -84,6 +106,18 @@ class VideoOptions:
         return options
 
     def validate(self) -> None:
+        if self.alignment_mode not in ALIGNMENT_MODES:
+            raise VideoError("不支持的歌词对齐模式")
+        if self.pronunciation_mode not in PRONUNCIATION_MODES:
+            raise VideoError("不支持的发音标注模式")
+        if self.audio_mode not in AUDIO_MODES:
+            raise VideoError("不支持的音频模式")
+        if self.alignment_mode != "model" and self.pronunciation_mode != "none":
+            raise VideoError("发音标注需要使用模型对齐模式")
+        if self.alignment_mode != "model" and self.audio_mode == "instrumental":
+            raise VideoError("纯伴奏需要使用模型对齐模式")
+        if self.alignment_mode != "model" and self.lyric_highlight_mode == "smooth":
+            raise VideoError("平滑扫色需要使用模型对齐模式")
         if self.lyric_mode not in LYRIC_MODES:
             raise VideoError("不支持的歌词显示模式")
         if self.lyric_highlight_mode not in LYRIC_HIGHLIGHT_MODES:
@@ -119,6 +153,7 @@ class VideoProject:
     audio_path: Path
     cover_path: Path
     custom_background_path: Path
+    alignment: dict[str, Any] | None = None
 
     @classmethod
     def load(cls, output_root: Path, song_id: int) -> "VideoProject":
@@ -133,11 +168,16 @@ class VideoProject:
         if not metadata_path.exists() or not timeline_path.exists() or not audio_paths or not cover_paths:
             raise VideoError("歌曲素材不完整，请重新下载全部素材")
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        timeline = [
-            line
-            for line in json.loads(timeline_path.read_text(encoding="utf-8"))
-            if _is_display_lyric(line)
-        ]
+        timeline = []
+        for source_index, line in enumerate(json.loads(timeline_path.read_text(encoding="utf-8"))):
+            if _is_display_lyric(line):
+                item = dict(line)
+                item.setdefault("_source_index", source_index)
+                timeline.append(item)
+        alignment = None
+        alignment_path = directory / "alignment.json"
+        if alignment_path.is_file():
+            alignment = _load_alignment_payload(alignment_path)
         return cls(
             directory=directory,
             song=metadata,
@@ -145,6 +185,7 @@ class VideoProject:
             audio_path=audio_paths[0],
             cover_path=cover_paths[0],
             custom_background_path=directory / "custom_background.png",
+            alignment=alignment,
         )
 
     @property
@@ -165,6 +206,17 @@ class VideoProject:
             return int(OPENING_SECONDS * 1000)
         return 0
 
+    def audio_for(self, options: VideoOptions) -> Path:
+        if options.audio_mode == "instrumental":
+            artifacts = self.alignment.get("artifacts") if self.alignment else None
+            reference = artifacts.get("instrumental") if isinstance(artifacts, dict) else None
+            if reference:
+                candidate = _safe_alignment_artifact(self.directory, reference)
+                if candidate is not None and candidate.is_file():
+                    return candidate
+            raise VideoError("纯伴奏尚未准备好，请使用模型预处理模式生成")
+        return self.audio_path
+
 
 class FrameRenderer:
     def __init__(
@@ -176,6 +228,8 @@ class FrameRenderer:
     ):
         self.project = project
         self.options = options
+        if options.alignment_mode == "model" and not project.alignment:
+            raise VideoError("模型对齐数据不存在，请先完成预处理")
         self.width, self.height = options.size
         self.scale = self.width / 1920
         self.cover = Image.open(project.cover_path).convert("RGB")
@@ -183,13 +237,100 @@ class FrameRenderer:
         self.background = self._make_background()
         self.static_main = self._make_static_main()
         self.spectrum = spectrum
-        self.pre_roll_ms = project.pre_roll_ms(options)
+        self.timeline = self._timeline_for_options()
+        if options.alignment_mode == "model" and options.lyric_highlight_mode == "smooth":
+            self.timeline = self._smooth_model_sweep_timeline(self.timeline)
+        if options.alignment_mode == "model" and self.timeline:
+            self.pre_roll_ms = int(OPENING_SECONDS * 1000) if options.opening and int(self.timeline[0].get("start_ms", 0)) < int(OPENING_SECONDS * 1000) else 0
+        else:
+            self.pre_roll_ms = project.pre_roll_ms(options)
+        self._current_song_time_ms = 0
+
+    def _timeline_for_options(self) -> list[dict[str, Any]]:
+        if self.options.alignment_mode != "model" or not self.project.alignment:
+            return self.project.timeline
+        rows = self.project.alignment.get("lines")
+        if not isinstance(rows, list):
+            return self.project.timeline
+        source_by_index = {
+            int(row.get("_source_index", index)): row
+            for index, row in enumerate(self.project.timeline)
+            if isinstance(row, dict)
+        }
+        result = []
+        for row in rows:
+            if not isinstance(row, dict) or not str(row.get("text") or "").strip():
+                continue
+            if row.get("status") == "non_sung":
+                continue
+            item = dict(row)
+            source = source_by_index.get(int(row.get("source_index", -1)), {})
+            item.setdefault("translation", source.get("translation", ""))
+            item.setdefault("romanization", item.get("romaji", ""))
+            item.setdefault("display_units", [])
+            result.append(item)
+        return result or self.project.timeline
+
+    @staticmethod
+    def _sweep_gap_threshold_ms() -> int:
+        """Return the renderer-only short-gap smoothing threshold.
+
+        This is intentionally an environment-level tuning knob rather than a
+        request/front-end option.  Invalid or negative values fall back to the
+        conservative default.
+        """
+        value = os.environ.get("CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS", "").strip()
+        if not value:
+            return MODEL_SWEEP_GAP_THRESHOLD_MS
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return MODEL_SWEEP_GAP_THRESHOLD_MS
+
+    @classmethod
+    def _smooth_model_sweep_timeline(cls, timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Bridge short visible-character gaps for model sweep rendering.
+
+        ``alignment.json`` is the source of truth and is never modified.  A
+        private copy of its display units is adjusted only when two adjacent
+        non-whitespace characters have a positive gap no larger than the
+        configured threshold.  The gap is split at its midpoint, preserving
+        the original ordering while removing a visible pause.  Explicit
+        whitespace units and longer gaps remain untouched.
+        """
+        threshold = cls._sweep_gap_threshold_ms()
+        if threshold <= 0:
+            return timeline
+        smoothed: list[dict[str, Any]] = []
+        for line in timeline:
+            units = line.get("display_units")
+            if not isinstance(units, list) or len(units) < 2:
+                smoothed.append(line)
+                continue
+            copied = dict(line)
+            copied_units = [dict(unit) for unit in units if isinstance(unit, dict)]
+            if len(copied_units) < 2:
+                smoothed.append(copied)
+                continue
+            for left, right in zip(copied_units, copied_units[1:]):
+                if not str(left.get("text") or "").strip() or not str(right.get("text") or "").strip():
+                    continue
+                left_end = int(left.get("end_ms", left.get("start_ms", 0)))
+                right_start = int(right.get("start_ms", left_end))
+                gap = right_start - left_end
+                if 0 < gap <= threshold:
+                    boundary = left_end + gap // 2
+                    left["end_ms"] = boundary
+                    right["start_ms"] = boundary
+            copied["display_units"] = copied_units
+            smoothed.append(copied)
+        return smoothed
 
     def representative_time_ms(self) -> int:
-        if not self.project.timeline:
+        if not self.timeline:
             return self.pre_roll_ms
-        line = self.project.timeline[min(1, len(self.project.timeline) - 1)]
-        end = self._line_end_ms(min(1, len(self.project.timeline) - 1))
+        line = self.timeline[min(1, len(self.timeline) - 1)]
+        end = self._line_end_ms(min(1, len(self.timeline) - 1))
         song_time = int(line["start_ms"] + max(600, (end - int(line["start_ms"])) * 0.52))
         return self.pre_roll_ms + song_time
 
@@ -428,9 +569,10 @@ class FrameRenderer:
         frame.paste(Image.alpha_composite(frame.convert("RGBA"), layer).convert("RGB"))
 
     def _draw_lyrics(self, frame: Image.Image, song_time_ms: int) -> None:
-        if not self.project.timeline or song_time_ms < 0:
+        if not self.timeline or song_time_ms < 0:
             return
         state = self._lyric_state(song_time_ms)
+        self._current_song_time_ms = song_time_ms
         if state["kind"] == "blank":
             return
         if state["kind"] == "cue":
@@ -438,10 +580,12 @@ class FrameRenderer:
             self._draw_countdown(frame, state["remaining"])
             return
         progress = state["progress"] if self.options.lyric_highlight_mode == "sweep" else 1.0
+        if self.options.alignment_mode == "model" and self.options.lyric_highlight_mode in {"sweep", "smooth"}:
+            progress = self._model_progress(state["index"], song_time_ms)
         self._draw_lyric_pair(frame, state["index"], progress)
 
     def _lyric_state(self, song_time_ms: int) -> dict[str, Any]:
-        starts = [int(line["start_ms"]) for line in self.project.timeline]
+        starts = [int(line["start_ms"]) for line in self.timeline]
         if song_time_ms < starts[0]:
             if self.options.interlude_cue and starts[0] - song_time_ms <= INTERLUDE_COUNTDOWN_MS:
                 return {"kind": "cue", "index": 0, "remaining": starts[0] - song_time_ms}
@@ -449,7 +593,7 @@ class FrameRenderer:
         index = int(np.searchsorted(starts, song_time_ms, side="right") - 1)
         start = starts[index]
         end = self._line_end_ms(index)
-        if index + 1 < len(starts) and starts[index + 1] - start >= INTERLUDE_THRESHOLD_MS:
+        if index + 1 < len(starts) and self._is_interlude_after(index):
             if song_time_ms <= end:
                 return {"kind": "active", "index": index, "progress": _ratio(song_time_ms, start, end)}
             next_start = starts[index + 1]
@@ -459,18 +603,31 @@ class FrameRenderer:
         return {"kind": "active", "index": index, "progress": _ratio(song_time_ms, start, end)}
 
     def _line_end_ms(self, index: int) -> int:
-        line = self.project.timeline[index]
+        line = self.timeline[index]
         start = int(line["start_ms"])
-        if index + 1 >= len(self.project.timeline):
+        if self.options.alignment_mode == "model" and line.get("singing_end_ms") is not None:
+            singing_end = max(start, min(self.project.duration_ms, int(line["singing_end_ms"])))
+            if index + 1 >= len(self.timeline):
+                return max(start + 400, min(self.project.duration_ms, singing_end + MODEL_INTERLUDE_HOLD_MS))
+            next_start = int(self.timeline[index + 1]["start_ms"])
+            if self._is_interlude_after(index):
+                return min(next_start, singing_end + MODEL_INTERLUDE_HOLD_MS)
+            return max(start + 400, next_start)
+        # Model artifacts carry an explicit lyric interval.  The legacy
+        # eight-second cap is an interlude heuristic and would truncate a
+        # legitimately long model-aligned line halfway through.
+        if self.options.alignment_mode == "model" and (line.get("display_units") or line.get("tokens") or line.get("mora")):
+            return max(start + 400, min(self.project.duration_ms, int(line.get("end_ms", start))))
+        if index + 1 >= len(self.timeline):
             return min(self.project.duration_ms, start + MAX_INTERLUDE_SWEEP_MS)
-        next_start = int(self.project.timeline[index + 1]["start_ms"])
+        next_start = int(self.timeline[index + 1]["start_ms"])
         if next_start - start >= INTERLUDE_THRESHOLD_MS:
             return min(next_start, start + MAX_INTERLUDE_SWEEP_MS)
         return max(start + 400, next_start)
 
     def _draw_lyric_pair(self, frame: Image.Image, index: int, progress: float | None) -> None:
-        current = self.project.timeline[index]
-        following = self.project.timeline[index + 1] if index + 1 < len(self.project.timeline) else None
+        current = self.timeline[index]
+        following = self.timeline[index + 1] if index + 1 < len(self.timeline) else None
         blocks = [(index, current, progress)]
         # Keep the next line hidden during an interlude.  It should first
         # appear as the cue near the end of the gap, giving each section a
@@ -483,10 +640,13 @@ class FrameRenderer:
             self._draw_lyric_block(frame, line, row, line_progress)
 
     def _is_interlude_after(self, index: int) -> bool:
-        if index + 1 >= len(self.project.timeline):
+        if index + 1 >= len(self.timeline):
             return False
-        start = int(self.project.timeline[index]["start_ms"])
-        next_start = int(self.project.timeline[index + 1]["start_ms"])
+        start = int(self.timeline[index]["start_ms"])
+        next_start = int(self.timeline[index + 1]["start_ms"])
+        if self.options.alignment_mode == "model" and self.timeline[index].get("singing_end_ms") is not None:
+            singing_end = int(self.timeline[index].get("singing_end_ms") or start)
+            return next_start - singing_end > MODEL_INTERLUDE_THRESHOLD_MS
         return next_start - start >= INTERLUDE_THRESHOLD_MS
 
     def _lyric_row(self, index: int) -> int:
@@ -498,6 +658,22 @@ class FrameRenderer:
             else:
                 row = 1 - row
         return row
+
+    def _model_progress(self, index: int, song_time_ms: int) -> float:
+        line = self.timeline[index]
+        start, end = int(line.get("start_ms", 0)), int(line.get("end_ms", 0))
+        spans = line.get("display_units") or line.get("tokens") or line.get("mora") or []
+        if not spans:
+            return _ratio(song_time_ms, start, end)
+        completed = 0.0
+        total = max(1, end - start)
+        if line.get("display_units"):
+            total = max(1, max(int(item.get("end_ms", start)) for item in line["display_units"]) - start)
+        for item in spans:
+            a = int(item.get("start_ms", start))
+            b = int(item.get("end_ms", a))
+            completed += max(0, min(song_time_ms, b) - a)
+        return max(0.0, min(1.0, completed / total))
 
     def _draw_lyric_block(
         self, frame: Image.Image, line: dict[str, Any], row: int, progress: float | None
@@ -512,7 +688,13 @@ class FrameRenderer:
         font = self._fit_font(text, self._font(60, bold=True, text=text), max_width, 60, bold=True, minimum=36)
         inactive = (236, 238, 241)
         align_left = row == 0
-        self._draw_wipe_text(frame, text, y, font, align_left, inactive, progress)
+        if self.options.alignment_mode == "model" and self.options.lyric_highlight_mode in {"sweep", "smooth"} and (line.get("display_units") or line.get("tokens") or line.get("mora")) and progress is not None:
+            self._draw_model_wipe_text(frame, text, y, font, align_left, inactive, line)
+        else:
+            self._draw_wipe_text(frame, text, y, font, align_left, inactive, progress)
+
+        if self.options.alignment_mode == "model" and self.options.pronunciation_mode != "none":
+            self._draw_pronunciation(frame, line, text, x_hint=None, y=y, font=font, align_left=align_left)
 
         secondary = None
         if self.options.lyric_mode == "translation":
@@ -527,6 +709,115 @@ class FrameRenderer:
             self._draw_plain_text(
                 frame, secondary, y + self._px(67), secondary_font, align_left, (174, 181, 193)
             )
+
+    def _draw_pronunciation(
+        self, frame: Image.Image, line: dict[str, Any], text: str, *, x_hint: int | None,
+        y: int, font: ImageFont.FreeTypeFont, align_left: bool,
+    ) -> None:
+        spans = line.get("surface_spans") or []
+        if not spans:
+            return
+        draw = ImageDraw.Draw(frame)
+        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=self._px(3))
+        width = bbox[2] - bbox[0]
+        x = self._px(76) if align_left else self.width - self._px(76) - width
+        mode = self.options.pronunciation_mode
+        small_size = 23 if mode == "kana" else 18
+        units = line.get("display_units") or []
+        if units:
+            # lyric-align provides one-to-one surface units.  This prevents a
+            # multi-kanji Sudachi span from painting ruby over kana characters.
+            for index, unit in enumerate(units[:len(text)]):
+                char = str(unit.get("text") or text[index])
+                if mode == "kana" and not _is_kanji(char):
+                    continue
+                value = str((unit.get("reading") if mode == "kana" else unit.get("romaji")) or "").strip()
+                if not value:
+                    continue
+                left = x + round(draw.textlength(text[:index], font=font))
+                right = x + round(draw.textlength(text[:index + 1], font=font))
+                pfont = self._fit_font(value, self._font(small_size, text=value), max(10, right - left), small_size, minimum=11)
+                pb = draw.textbbox((0, 0), value, font=pfont)
+                px = left + max(0, (right - left - (pb[2] - pb[0])) // 2)
+                py = y - self._px(30 if mode == "kana" else 25)
+                draw.text((px, py), value, font=pfont, fill=(205, 214, 230), stroke_width=self._px(1), stroke_fill=(8, 10, 15))
+            return
+        for span in spans:
+            a, b = int(span.get("surface_start", 0)), int(span.get("surface_end", 0))
+            if b <= a or a >= len(text):
+                continue
+            surface_value = text[max(0, a):min(len(text), b)]
+            if mode == "kana" and not any(_is_kanji(char) for char in surface_value):
+                continue
+            left = x + round(draw.textlength(text[:a], font=font))
+            right = x + round(draw.textlength(text[:min(len(text), b)], font=font))
+            value = str((span.get("reading") if mode == "kana" else span.get("romaji")) or "").strip()
+            if not value:
+                continue
+            pfont = self._fit_font(value, self._font(small_size, text=value), max(10, right - left), small_size, minimum=11)
+            pb = draw.textbbox((0, 0), value, font=pfont)
+            px = left + max(0, (right - left - (pb[2] - pb[0])) // 2)
+            py = y - self._px(30 if mode == "kana" else 25)
+            draw.text((px, py), value, font=pfont, fill=(205, 214, 230), stroke_width=self._px(1), stroke_fill=(8, 10, 15))
+
+    def _draw_model_wipe_text(self, frame: Image.Image, text: str, y: int, font: ImageFont.FreeTypeFont,
+                              align_left: bool, inactive: tuple[int, int, int], line: dict[str, Any]) -> None:
+        draw = ImageDraw.Draw(frame)
+        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=self._px(3))
+        width = bbox[2] - bbox[0]
+        x = self._px(76) if align_left else self.width - self._px(76) - width
+        draw.text((x, y), text, font=font, fill=inactive, stroke_width=self._px(3), stroke_fill=(8, 10, 15))
+        line_start = int(line.get("start_ms", 0))
+        line_end = int(line.get("end_ms", line_start))
+        units = line.get("display_units") or []
+        spans = line.get("surface_spans") or []
+        tokens = line.get("mora") or line.get("tokens") or []
+        for index, char in enumerate(text):
+            # Use Pillow's actual glyph advances for both layers.  A fraction
+            # of the total string width is not equivalent for Japanese glyphs
+            # and was the source of the visible blue/white displacement.
+            left = x + round(draw.textlength(text[:index], font=font))
+            right = x + round(draw.textlength(text[: index + 1], font=font))
+            if right <= left:
+                continue
+            if units and index < len(units):
+                char_start = int(units[index].get("start_ms", line.get("start_ms", 0)))
+                char_end = int(units[index].get("end_ms", char_start))
+            else:
+                mora_indices = self._char_mora_indices(spans, index, tokens, len(text))
+                if mora_indices and tokens:
+                    starts = [int(tokens[m].get("start_ms", line_start)) for m in mora_indices if m < len(tokens)]
+                    ends = [int(tokens[m].get("end_ms", line_end)) for m in mora_indices if m < len(tokens)]
+                    char_start, char_end = min(starts), max(ends)
+                else:
+                    char_start, char_end = line_start, line_end
+            progress = _ratio(self._current_song_time_ms, char_start, max(char_start + 1, char_end))
+            if progress <= 0:
+                continue
+            layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+            ImageDraw.Draw(layer).text((left, y), char, font=font, fill=(*self.accent, 255), stroke_width=self._px(3), stroke_fill=(8, 10, 15, 255))
+            clip_right = left + round((right - left) * progress)
+            crop = layer.crop((left, 0, max(left + 1, clip_right), self.height))
+            frame.paste(crop.convert("RGB"), (left, 0), crop)
+
+    @staticmethod
+    def _char_mora_indices(spans: list[dict[str, Any]], index: int, tokens: list[dict[str, Any]], text_length: int) -> set[int]:
+        for span in spans:
+            start, end = int(span.get("surface_start", 0)), int(span.get("surface_end", 0))
+            if not (start <= index < end):
+                continue
+            values = [int(value) for value in (span.get("mora_indices") or [])]
+            if not values:
+                break
+            offset, count = index - start, max(1, end - start)
+            lo = round(len(values) * offset / count)
+            hi = round(len(values) * (offset + 1) / count)
+            if hi <= lo:
+                hi = min(len(values), lo + 1)
+            return set(values[lo:hi])
+        if tokens:
+            return {min(len(tokens) - 1, int(index * len(tokens) / max(1, text_length)))}
+        return set()
 
     def _draw_wipe_text(
         self,
@@ -675,6 +966,7 @@ def render_preview(project: VideoProject, options: VideoOptions, destination: Pa
             # A still preview can use a representative spectrum before FFmpeg is installed.
             spectrum = None
     renderer = FrameRenderer(project, options, spectrum=spectrum)
+    audio_path = project.audio_for(options)
     frame = renderer.render(renderer.representative_time_ms())
     destination.parent.mkdir(parents=True, exist_ok=True)
     frame.save(destination, format="PNG", optimize=True)
@@ -684,6 +976,8 @@ def render_preview(project: VideoProject, options: VideoOptions, destination: Pa
         "height": renderer.height,
         "accent": "#%02x%02x%02x" % renderer.accent,
         "pre_roll_ms": renderer.pre_roll_ms,
+        "alignment_mode": options.alignment_mode,
+        "audio_mode": options.audio_mode,
     }
 
 
@@ -698,6 +992,7 @@ def render_video(
     ffmpeg = get_ffmpeg_executable()
     spectrum = SpectrumData.load_or_create(project, ffmpeg) if options.spectrum else None
     renderer = FrameRenderer(project, options, spectrum=spectrum)
+    audio_path = project.audio_for(options)
     total_ms = renderer.pre_roll_ms + project.duration_ms
     if duration_limit_ms is not None:
         total_ms = min(total_ms, duration_limit_ms)
@@ -726,7 +1021,7 @@ def render_video(
     command.extend(
         [
             "-i",
-            str(project.audio_path),
+            str(audio_path),
             "-map",
             "0:v:0",
             "-map",
@@ -778,7 +1073,39 @@ def render_video(
         "frames": total_frames,
         "resolution": options.resolution,
         "pre_roll_ms": renderer.pre_roll_ms,
+        "alignment_mode": options.alignment_mode,
+        "audio_mode": options.audio_mode,
     }
+
+
+def _prepare_model_alignment(project: VideoProject, options: VideoOptions, progress: Callable[[str, float, str], None] | None = None) -> None:
+    """Run lyric-align in-process, keeping its model cache alive for the queue."""
+    import sys
+    configured_root = os.environ.get("LYRIC_ALIGN_PATH", "").strip()
+    source_root = Path(configured_root).expanduser() if configured_root else Path(__file__).resolve().parents[2] / "lyric_align" / "src"
+    if str(source_root) not in sys.path:
+        sys.path.insert(0, str(source_root))
+    try:
+        from lyric_align import AlignmentConfig, ModelPaths, prepare_song
+    except ImportError as exc:
+        raise VideoError("模型预处理依赖 lyric-align 未安装，请先安装 lyric_align[all]") from exc
+    ffmpeg = get_ffmpeg_executable()
+    demucs_path = os.environ.get("LYRIC_DEMUCS_MODEL_PATH", "").strip() or None
+    ctc_path = os.environ.get("LYRIC_CTC_MODEL_PATH", "").strip() or None
+    if not demucs_path or not ctc_path:
+        raise VideoError("模型模式需要配置 LYRIC_DEMUCS_MODEL_PATH 和 LYRIC_CTC_MODEL_PATH")
+    config = AlignmentConfig(
+        models=ModelPaths(demucs_model_path=demucs_path, ctc_model_path=ctc_path),
+        g2p_backend=os.environ.get("LYRIC_G2P_BACKEND", "sudachi"),
+        device=os.environ.get("LYRIC_DEVICE", "cpu"),
+        ffmpeg_path=os.environ.get("LYRIC_FFMPEG_PATH", ffmpeg),
+        keep_vocals=False,
+        keep_instrumental=True,
+        # Vocals are an ephemeral CTC/activity input. WAV avoids an
+        # unnecessary libmp3lame encode and is more robust for long stems.
+        vocals_format="wav",
+    )
+    prepare_song(project.directory, config=config, stages=("reading", "demucs", "ctc"), progress=progress)
 
 
 class VideoJobManager:
@@ -881,7 +1208,10 @@ class VideoJobManager:
             )[:10]
             return {
                 "current": self._public_job(current) if current else None,
-                "queued_count": len(waiting_jobs),
+                # The user-facing queue count includes the current task.  A
+                # total active count is easier to understand than reporting
+                # only the number waiting behind it.
+                "queued_count": len(active),
                 "queued": queued,
                 "recent": self._public_job(recent) if recent else None,
                 "completed": [self._public_job(job) for job in completed],
@@ -892,17 +1222,34 @@ class VideoJobManager:
             self._update(
                 job_id,
                 status="running",
-                message="分析音频与准备画面",
-                progress=1,
+                message="准备生成任务",
+                progress=0,
                 started_at=int(time.time()),
             )
             project = VideoProject.load(self.output_root, song_id)
+            if options.alignment_mode == "model":
+                # Preparation deliberately does not consume the user-visible
+                # render progress bar.  Keep the diagnostic stage/sentence
+                # message in memory only: lyric-align emits one callback per
+                # sentence, but these callbacks are not resume checkpoints and
+                # must not cause repeated writes to video_jobs.json.
+
+                def prep_progress(stage: str, fraction: float, message: str) -> None:
+                    self._update_runtime(job_id, progress=0, message=f"预处理 · {message}")
+                self._update(job_id, message="预处理歌词与音频", progress=0)
+                _prepare_model_alignment(project, options, prep_progress)
+                project = VideoProject.load(self.output_root, song_id)
+                if not project.alignment:
+                    raise VideoError("模型预处理未生成有效 alignment.json")
             fingerprint = video_options_fingerprint(options)
             destination = project.directory / f"ktv_{options.resolution}_{fingerprint}.mp4"
 
             def on_progress(done: int, total: int) -> None:
-                percent = min(99, max(2, round(done / total * 100)))
-                self._update(job_id, progress=percent, message=f"正在渲染 {done}/{total} 帧")
+                # The progress bar represents video rendering only.  Model
+                # preprocessing remains at 0%, then rendering spans the full
+                # 0–99% range just like the traditional path.
+                percent = round(done / total * 99)
+                self._update(job_id, progress=min(99, max(0, percent)), message=f"正在渲染 {done}/{total} 帧")
 
             result = render_video(project, options, destination, on_progress)
             self._update(
@@ -914,11 +1261,14 @@ class VideoJobManager:
                 finished_at=int(time.time()),
             )
         except Exception as exc:
+            detail = str(exc)
+            if detail.startswith("Command '["):
+                detail = "FFmpeg 音频 stem 编码失败，请查看服务日志"
             self._update(
                 job_id,
                 status="error",
                 message="生成失败",
-                error=str(exc),
+                error=detail,
                 finished_at=int(time.time()),
             )
 
@@ -930,6 +1280,19 @@ class VideoJobManager:
             job.update(values)
             self._prune_terminal_jobs_locked()
             self._save_state_locked()
+
+    def _update_runtime(self, job_id: str, **values: Any) -> None:
+        """Update an active job for polling without journaling the change.
+
+        Preparation callbacks are intentionally ephemeral.  They provide a
+        useful live message (including CTC's sentence counter), but do not
+        represent a resumable checkpoint and therefore should not rewrite the
+        persistent queue journal for every aligned sentence.
+        """
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job is not None:
+                job.update(values)
 
     def _position_locked(self, job_id: str) -> int:
         position = 0
@@ -1261,6 +1624,18 @@ def _preview_spectrum(bars: int) -> np.ndarray:
     return np.clip((0.32 + 0.23 * np.sin(x) + 0.15 * np.sin(x * 2.31)) * envelope + 0.12, 0.08, 0.9)
 
 
+def _is_kanji(char: str) -> bool:
+    """Return whether a displayed character is a CJK ideograph."""
+    if not char:
+        return False
+    code = ord(char)
+    return (
+        0x3400 <= code <= 0x4DBF
+        or 0x4E00 <= code <= 0x9FFF
+        or 0xF900 <= code <= 0xFAFF
+    )
+
+
 def _hex_to_rgb(value: str) -> tuple[int, int, int]:
     return tuple(int(value[index : index + 2], 16) for index in (1, 3, 5))
 
@@ -1291,10 +1666,91 @@ def _is_display_lyric(line: dict[str, Any]) -> bool:
     text = str(line.get("text") or "").strip()
     if not text:
         return False
-    normalized = text.casefold().replace(" ", "")
-    if normalized in {"间奏", "間奏", "instrumental"}:
+    # Only remove explicit interlude/metadata markers.  The old substring
+    # rule (`music` anywhere in a short line) could discard real lyrics such
+    # as "music to me".  Wrapper punctuation is accepted for common forms
+    # like `~music~` without treating ordinary prose as a marker.
+    normalized = re.sub(r"\s+", "", text.casefold())
+    if LYRIC_MARKER.fullmatch(normalized):
         return False
-    if "music" in normalized and len(normalized) <= 24:
+    return True
+
+
+def _safe_alignment_artifact(directory: Path, reference: Any) -> Path | None:
+    """Resolve a library artifact reference without leaving the song tree."""
+    value = str(reference or "").strip()
+    if not value:
+        return None
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return None
+    try:
+        root = Path(directory).resolve()
+        resolved = (root / candidate).resolve()
+    except OSError:
+        return None
+    return resolved if resolved != root and root in resolved.parents else None
+
+
+def _load_alignment_payload(path: Path) -> dict[str, Any] | None:
+    """Load alignment through lyric-align when available.
+
+    The backend keeps legacy rendering usable when the optional package is not
+    installed, but never weakens validation when the package is present.
+    """
+    configured_root = os.environ.get("LYRIC_ALIGN_PATH", "").strip()
+    if configured_root:
+        import sys
+
+        source_root = str(Path(configured_root).expanduser())
+        if source_root not in sys.path:
+            sys.path.insert(0, source_root)
+    try:
+        from lyric_align import load_alignment
+    except ImportError:
+        load_alignment = None
+    if load_alignment is not None:
+        try:
+            artifact = load_alignment(path)
+        except (OSError, TypeError, ValueError):
+            return None
+        return artifact.to_dict() if artifact is not None else None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not _valid_alignment_payload(value):
+        return None
+    return value
+
+
+def _valid_alignment_payload(value: Any) -> bool:
+    """Lightweight schema gate used before handing data to the renderer."""
+    if not isinstance(value, dict) or not isinstance(value.get("lines"), list):
+        return False
+    try:
+        if int(value.get("schema_version", 0)) != 1:
+            return False
+        previous = -1
+        for row in value["lines"]:
+            if not isinstance(row, dict) or not str(row.get("text") or "").strip():
+                return False
+            start, end = int(row["start_ms"]), int(row["end_ms"])
+            if start < 0 or end < start or start < previous:
+                return False
+            previous = start
+            units = row.get("display_units") or []
+            last_unit = start
+            if not isinstance(units, list):
+                return False
+            for unit in units:
+                if not isinstance(unit, dict):
+                    return False
+                unit_start, unit_end = int(unit["start_ms"]), int(unit["end_ms"])
+                if unit_start < start or unit_end < unit_start or unit_end > end or unit_start < last_unit:
+                    return False
+                last_unit = unit_start
+    except (KeyError, TypeError, ValueError):
         return False
     return True
 

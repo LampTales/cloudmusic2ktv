@@ -14,6 +14,7 @@ from cloudmusic2ktv.video import (
     VideoJobManager,
     render_preview,
     video_options_fingerprint,
+    _valid_alignment_payload,
 )
 import cloudmusic2ktv.video as video_module
 
@@ -51,8 +52,11 @@ def test_video_options_excludes_overloaded_three_language_mode():
 def test_lyric_highlight_defaults_to_whole_line_and_validates_modes():
     assert VideoOptions.from_mapping({}).lyric_highlight_mode == "line"
     assert VideoOptions.from_mapping({"lyric_highlight_mode": "sweep"}).lyric_highlight_mode == "sweep"
+    assert VideoOptions.from_mapping({"alignment_mode": "model", "lyric_highlight_mode": "smooth"}).lyric_highlight_mode == "smooth"
     with pytest.raises(VideoError):
         VideoOptions.from_mapping({"lyric_highlight_mode": "word"})
+    with pytest.raises(VideoError):
+        VideoOptions.from_mapping({"lyric_highlight_mode": "smooth"})
 
 
 def test_lyric_highlight_mode_changes_option_fingerprint():
@@ -154,6 +158,77 @@ def test_active_lyric_is_whole_line_or_uniform_sweep(tmp_path):
     assert sweep_progress == [0.5]
 
 
+def test_model_sweep_bridges_only_short_visible_character_gaps(monkeypatch, tmp_path):
+    project = make_project(tmp_path / "project")
+    units = [
+        {"text": "甲", "start_ms": 1000, "end_ms": 1100},
+        {"text": "乙", "start_ms": 1150, "end_ms": 1250},  # 50 ms gap: bridge
+        {"text": " ", "start_ms": 1300, "end_ms": 1320},  # explicit space: preserve
+        {"text": "丙", "start_ms": 1400, "end_ms": 1500},
+        {"text": "丁", "start_ms": 1700, "end_ms": 1800},  # 200 ms: preserve
+    ]
+    project = VideoProject(
+        **{
+            **project.__dict__,
+            "alignment": {
+                "lines": [
+                    {
+                        "source_index": 0,
+                        "text": "甲乙 丙丁",
+                        "start_ms": 1000,
+                        "end_ms": 2000,
+                        "display_units": units,
+                    }
+                ]
+            },
+        }
+    )
+    monkeypatch.delenv("CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS", raising=False)
+    renderer = FrameRenderer(
+        project,
+        VideoOptions(alignment_mode="model", lyric_highlight_mode="smooth", spectrum=False),
+    )
+    smoothed = renderer.timeline[0]["display_units"]
+    assert smoothed[0]["end_ms"] == smoothed[1]["start_ms"] == 1125
+    assert smoothed[1]["end_ms"] == 1250
+    assert smoothed[2]["start_ms"] == 1300
+    assert smoothed[3]["start_ms"] == 1400
+    assert smoothed[4]["start_ms"] == 1700
+    # Rendering must not mutate the alignment artifact supplied by the caller.
+    assert units[0]["end_ms"] == 1100
+    assert units[1]["start_ms"] == 1150
+
+
+def test_model_sweep_gap_threshold_is_operator_configurable(monkeypatch, tmp_path):
+    project = make_project(tmp_path / "project")
+    project = VideoProject(
+        **{
+            **project.__dict__,
+            "alignment": {
+                "lines": [
+                    {
+                        "source_index": 0,
+                        "text": "甲乙",
+                        "start_ms": 1000,
+                        "end_ms": 2000,
+                        "display_units": [
+                            {"text": "甲", "start_ms": 1000, "end_ms": 1100},
+                            {"text": "乙", "start_ms": 1250, "end_ms": 1350},
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+    monkeypatch.setenv("CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS", "200")
+    renderer = FrameRenderer(
+        project,
+        VideoOptions(alignment_mode="model", lyric_highlight_mode="smooth", spectrum=False),
+    )
+    assert renderer.timeline[0]["display_units"][0]["end_ms"] == 1175
+    assert renderer.timeline[0]["display_units"][1]["start_ms"] == 1175
+
+
 def test_countdown_is_above_left_top_lyric(tmp_path):
     project = make_project(tmp_path)
     renderer = FrameRenderer(project, VideoOptions(spectrum=False))
@@ -222,6 +297,87 @@ def test_project_ignores_blank_and_music_marker_lines(tmp_path):
     assert [line["text"] for line in project.timeline] == ["真正的歌词"]
 
 
+def test_project_loads_alignment_through_public_schema(tmp_path):
+    directory = tmp_path / "123_artist_title"
+    directory.mkdir()
+    (directory / "metadata.json").write_text(
+        json.dumps({"id": 123, "duration_ms": 10_000}), encoding="utf-8"
+    )
+    (directory / "lyrics_timeline.json").write_text(
+        json.dumps([{"text": "歌詞", "start_ms": 1000, "end_ms": 3000}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (directory / "audio.mp3").write_bytes(b"ID3")
+    Image.new("RGB", (100, 100)).save(directory / "cover.jpg")
+    (directory / "alignment.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "song": {},
+                "inputs": {},
+                "timing": {},
+                "lines": [
+                    {
+                        "source_index": 0,
+                        "text": "歌詞",
+                        "start_ms": 1000,
+                        "end_ms": 3000,
+                        "status": "interpolation",
+                        "alignment_status": None,
+                        "timing_source": "line_interpolation",
+                        "display_units": [],
+                    }
+                ],
+                "stages": {},
+                "models": {},
+                "artifacts": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    project = VideoProject.load(tmp_path, 123)
+    assert project.alignment is not None
+    assert project.alignment["lines"][0]["text"] == "歌詞"
+
+
+def test_project_keeps_lyrics_that_only_mention_music(tmp_path):
+    directory = tmp_path / "123_artist_title"
+    directory.mkdir()
+    (directory / "metadata.json").write_text(json.dumps({"duration_ms": 10000}), encoding="utf-8")
+    (directory / "lyrics_timeline.json").write_text(
+        json.dumps(
+            [
+                {"start_ms": 1000, "end_ms": 3000, "text": "music to me"},
+                {"start_ms": 4000, "end_ms": 6000, "text": "[interlude]"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (directory / "audio.mp3").write_bytes(b"ID3")
+    Image.new("RGB", (100, 100)).save(directory / "cover.jpg")
+    project = VideoProject.load(tmp_path, 123)
+    assert [line["text"] for line in project.timeline] == ["music to me"]
+
+
+def test_alignment_schema_gate_rejects_unknown_future_versions():
+    assert not _valid_alignment_payload({"schema_version": 2, "lines": []})
+
+
+def test_instrumental_artifact_reference_cannot_escape_song_directory(tmp_path):
+    project = make_project(tmp_path / "project")
+    outside = project.directory.parent / "instrumental.mp3"
+    outside.write_bytes(b"outside")
+    project = VideoProject(
+        **{
+            **project.__dict__,
+            "alignment": {"artifacts": {"instrumental": "../instrumental.mp3"}},
+        }
+    )
+    with pytest.raises(VideoError, match="纯伴奏尚未准备好"):
+        project.audio_for(VideoOptions(alignment_mode="model", audio_mode="instrumental"))
+
+
 def test_background_job_reports_completion(monkeypatch, tmp_path):
     project = make_project(tmp_path / "project")
     monkeypatch.setattr(VideoProject, "load", classmethod(lambda cls, root, song_id: project))
@@ -254,7 +410,7 @@ def test_background_job_reports_completion(monkeypatch, tmp_path):
     assert completed[0]["song"]["album"] == project.song["album"]
 
 
-def test_queue_deduplicates_active_options_and_reports_waiting_count(monkeypatch, tmp_path):
+def test_queue_deduplicates_active_options_and_reports_total_active_count(monkeypatch, tmp_path):
     project = make_project(tmp_path / "project")
     monkeypatch.setattr(VideoProject, "load", classmethod(lambda cls, root, song_id: project))
     started = threading.Event()
@@ -285,7 +441,7 @@ def test_queue_deduplicates_active_options_and_reports_waiting_count(monkeypatch
     assert duplicate["deduplicated"] is True
     assert waiting["position"] == 1
     queue = manager.queue_status()
-    assert queue["queued_count"] == 1
+    assert queue["queued_count"] == 2
     assert queue["queued"][0]["id"] == waiting["id"]
     assert queue["queued"][0]["position"] == 1
     assert queue["queued"][0]["song"]["name"] == project.song["name"]

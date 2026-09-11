@@ -10,6 +10,7 @@ from cloudmusic2ktv.service import (
     parse_song_id,
     safe_filename,
 )
+from cloudmusic2ktv.netease import NeteaseError
 
 
 @pytest.mark.parametrize(
@@ -84,3 +85,46 @@ def test_available_lyric_types_reports_only_non_empty_sources():
     }
 
     assert available_lyric_types(payload) == ["original", "romanization", "karaoke"]
+
+
+def test_redownload_cleanup_removes_derived_artifacts_but_keeps_sources(tmp_path):
+    directory = tmp_path / "123_artist_song"
+    directory.mkdir()
+    (directory / "metadata.json").write_text("{}", encoding="utf-8")
+    (directory / "audio.mp3").write_bytes(b"audio")
+    for name in (
+        "alignment.json",
+        "preprocessing.json",
+        "spectrum_30fps.npz",
+        "video_preview_abc.png",
+        "ktv_720p_abc.mp4",
+        "stale.part",
+        "stale.source.wav",
+    ):
+        (directory / name).write_bytes(b"derived")
+    (directory / "stems").mkdir()
+    (directory / "stems" / "vocals.wav").write_bytes(b"stem")
+
+    SongDownloadService(object(), tmp_path)._clear_generated_artifacts(123, directory)
+
+    assert (directory / "metadata.json").is_file()
+    assert (directory / "audio.mp3").is_file()
+    assert not (directory / "alignment.json").exists()
+    assert not (directory / "preprocessing.json").exists()
+    assert not (directory / "spectrum_30fps.npz").exists()
+    assert not (directory / "stems").exists()
+
+
+def test_download_guard_reads_video_job_journal_from_instance(tmp_path):
+    state_path = tmp_path / "instance" / "video_jobs.json"
+    state_path.parent.mkdir()
+    state_path.write_text(
+        json.dumps({"version": 1, "jobs": {"job": {"song_id": 123, "status": "running"}}}),
+        encoding="utf-8",
+    )
+
+    service = SongDownloadService(
+        object(), tmp_path / "outputs", video_jobs_state_path=state_path
+    )
+    with pytest.raises(NeteaseError, match="正在生成视频"):
+        service._assert_no_active_video_job(123)

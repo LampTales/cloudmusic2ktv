@@ -793,7 +793,9 @@ def playlist_tracks(playlist_id: int) -> Any:
 def inspect_song() -> Any:
     song_id = body_song_id()
     with anonymous_netease_client() as client:
-        song = SongDownloadService(client, OUTPUTS).inspect(song_id)
+        song = SongDownloadService(
+            client, OUTPUTS, video_jobs_state_path=INSTANCE / "video_jobs.json"
+        ).inspect(song_id)
     return jsonify({"ok": True, "song": song, "local": song_local_status(song_id)})
 
 
@@ -819,13 +821,17 @@ def download_song() -> Any:
     try:
         try:
             with current_netease_client() as client:
-                result = SongDownloadService(client, OUTPUTS).download(song_id, level)
+                result = SongDownloadService(
+                    client, OUTPUTS, video_jobs_state_path=INSTANCE / "video_jobs.json"
+                ).download(song_id, level)
         except NeteaseError as first_error:
             if not is_netease_auth_failure(first_error):
                 raise
             try:
                 with anonymous_netease_client() as client:
-                    result = SongDownloadService(client, OUTPUTS).download(song_id, level)
+                    result = SongDownloadService(
+                        client, OUTPUTS, video_jobs_state_path=INSTANCE / "video_jobs.json"
+                    ).download(song_id, level)
             except NeteaseError as anonymous_error:
                 if is_netease_auth_failure(anonymous_error):
                     raise NeteaseError(
@@ -846,9 +852,28 @@ def video_preview() -> Any:
     song_id = video_song_id(body.get("song", ""))
     options = VideoOptions.from_mapping(body.get("options"))
     project = VideoProject.load(OUTPUTS, song_id)
+    # Keep previews cheap: model preprocessing belongs to the serialized
+    # video queue, not to a threaded Flask request.
+    preview_fallback = options.alignment_mode == "model" and not project.alignment
+    if preview_fallback:
+        fallback_values = options.to_dict()
+        fallback_values.update(
+            alignment_mode="legacy",
+            pronunciation_mode="none",
+            audio_mode="original",
+            lyric_mode="original",
+        )
+        # Smooth sweep depends on model display units.  Until preprocessing
+        # completes, render the cheap legacy preview with ordinary sweep
+        # timing; the queued model render will apply smoothing afterward.
+        if fallback_values.get("lyric_highlight_mode") == "smooth":
+            fallback_values["lyric_highlight_mode"] = "sweep"
+        options = VideoOptions.from_mapping(fallback_values)
     fingerprint = video_options_fingerprint(options)
     destination = project.directory / f"video_preview_{fingerprint}.png"
     result = render_preview(project, options, destination)
+    if preview_fallback:
+        result["model_fallback"] = True
     result["url"] = artifact_url(song_id, destination.name, destination.stat().st_mtime_ns)
     return jsonify({"ok": True, "preview": result})
 

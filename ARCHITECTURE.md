@@ -1,6 +1,10 @@
 # CloudMusic2KTV 架构说明
 
-本文记录当前 `divide` 分支的真实结构、进程边界、数据流和修改约束。用户和部署说明见 [README.md](README.md)。
+本文记录当前代码的真实结构、进程边界、数据流、状态转换和修改约束。
+用户和部署说明见 [README.md](README.md)。
+
+本文以“实际代码优先”：当文档描述与实现或测试冲突时，应先修复文档，
+再决定是否需要修改实现。
 
 ## 1. 架构决策
 
@@ -230,6 +234,19 @@ docker compose config
 - 后端 API-only 边界；
 - 前端资源、运行配置和开发代理。
 
+### 10.1 读写与请求节制
+
+- 队列状态由 `VideoJobManager.lock` 保护；`queue_status()` 只读内存，不触发
+  文件写入。
+- 任务创建、开始、渲染进度和终态会原子更新 `video_jobs.json`；模型预处理的
+  `aligned line N/M` 回调只更新运行时内存，不是可恢复 checkpoint。
+- 前端队列在有活跃任务时每 1.5 秒轮询，空闲时每 15 秒轮询，失败时指数退避；
+  页面隐藏时停止。预览请求使用 420 ms debounce，并以请求序号丢弃过期响应。
+- 歌单和歌曲详情使用带 TTL/LRU 的进程内缓存；队列查询使用只读 session 认证，
+  不会因轮询延长会话。
+- 下载、预处理和视频输出使用 `.part` 文件或临时文件后原子替换；重新下载
+  只在新素材全部成功后清理旧的衍生文件。
+
 ## 11. 安全与已知限制
 
 - 不记录或提交 `instance/`、`outputs/`、Cookie 和用户媒体；
@@ -241,3 +258,23 @@ docker compose config
 - 普通 artifact URL 要求网站会话；投屏使用后端签发的短期 HMAC 签名 URL，设备无需携带网站 Cookie，过期后失效；
 - 前端开发代理使用 Flask，仅用于开发；生产使用 Nginx 镜像；
 - 后端 JSON 存储适合可信、低流量、单实例部署，不是多节点数据库。
+
+## 12. 本地调试启动配置
+
+```bash
+# backend（conda 环境 ktv）
+CLOUDMUSIC2KTV_HOST=0.0.0.0 \
+CLOUDMUSIC2KTV_PORT=17861 \
+CLOUDMUSIC2KTV_BASE_PATH=/ktv \
+python app.py
+
+# frontend（另一个终端，同一 conda 环境）
+CLOUDMUSIC2KTV_BACKEND_ORIGIN=http://127.0.0.1:17861 \
+CLOUDMUSIC2KTV_FRONTEND_HOST=0.0.0.0 \
+CLOUDMUSIC2KTV_FRONTEND_PORT=8080 \
+CLOUDMUSIC2KTV_FRONTEND_BASE_PATH=/ktv \
+python frontend_server.py
+```
+
+访问 `http://<本机或局域网地址>:8080/ktv/`，健康检查为
+`http://127.0.0.1:17861/api/healthz`。

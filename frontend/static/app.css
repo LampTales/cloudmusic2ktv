@@ -316,8 +316,14 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .preview-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
 .preview-actions > span { min-width: 0; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .preview-actions button { flex: 0 0 auto; white-space: nowrap; }
-.options-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
-.options-heading span { color: #999; font-size: 11px; }
+.options-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.options-heading span { color: #999; font-size: 11px; white-space: nowrap; }
+.options-title-row { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.options-title-row > strong { white-space: nowrap; }
+.alignment-mode-badge { position: relative; min-height: 24px; padding: 3px 9px; border: 1px solid; border-radius: 999px; cursor: pointer; font-size: 10px; font-weight: 900; line-height: 1; white-space: nowrap; }
+.alignment-mode-badge::before { content: ""; position: absolute; inset: -7px; }
+.alignment-mode-badge.normal { color: #257b50; background: #eff9f3; border-color: #bfe2ce; }
+.alignment-mode-badge.beta { color: var(--red); background: #fff5f5; border-color: #f3aaaa; }
 .option-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 10px; }
 .option-grid input[type="color"] { height: 46px; padding: 5px; cursor: pointer; }
 .option-grid input[type="file"] { padding: 9px; font-size: 11px; }
@@ -567,6 +573,10 @@ button:disabled { opacity: .48; cursor: not-allowed; }
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
   }
+  .options-heading { align-items: flex-start; }
+  .options-heading > span { padding-top: 7px; font-size: 10px; text-align: right; }
+  .options-title-row { gap: 8px; }
+  .alignment-mode-badge { min-height: 26px; }
   .option-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 8px; }
   .advanced-select-grid { grid-template-columns: 1fr; }
   .render-row { align-items: stretch; flex-direction: column; gap: 13px; }

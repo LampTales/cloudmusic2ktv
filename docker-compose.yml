@@ -12,9 +12,20 @@ services:
       CLOUDMUSIC2KTV_PLAYLIST_CACHE_TTL_SECONDS: ${CLOUDMUSIC2KTV_PLAYLIST_CACHE_TTL_SECONDS:-21600}
       CLOUDMUSIC2KTV_PLAYLIST_CACHE_MAX_ENTRIES: ${CLOUDMUSIC2KTV_PLAYLIST_CACHE_MAX_ENTRIES:-32}
       CLOUDMUSIC2KTV_FONT_DIR: /usr/share/fonts/opentype/noto
+      # Model weights are mounted read-only and never included in the image.
+      LYRIC_DEMUCS_MODEL_PATH: ${LYRIC_DEMUCS_MODEL_PATH:-/models/huggingface/hub/models--adefossez--HTDemucs/snapshots/cbc8a9b1a87023b7fd74e7b3412e6321c0eab003}
+      LYRIC_CTC_MODEL_PATH: ${LYRIC_CTC_MODEL_PATH:-/models/huggingface/hub/models--jonatasgrosman--wav2vec2-large-xlsr-53-japanese/snapshots/cf031e020336460d15a417eba710bbc5bb43be9a}
+      LYRIC_DEVICE: ${LYRIC_DEVICE:-cpu}
+      LYRIC_G2P_BACKEND: sudachi
+      HF_HOME: /models/huggingface
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      # Renderer-only smoothing for short gaps in model sweep highlighting.
+      CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS: ${CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS:-100}
     volumes:
       - ./docker-data/instance:/app/instance
       - ./docker-data/outputs:/app/outputs
+      - ${LYRIC_MODELS_DIR:-./docker-data/models}:/models:ro
     expose:
       - "7860"
     restart: unless-stopped
