@@ -162,7 +162,7 @@ h2 { margin: 0; font-size: 24px; line-height: 1.25; letter-spacing: -.02em; }
 .playlist-tracks-heading { margin: 20px 0 10px; }
 .playlist-track-search-wrap { grid-column: 2; width: min(320px, 100%); justify-self: end; align-self: end; }
 .playlist-track-search { min-height: 40px; margin: 0; padding: 8px 11px; }
-.playlist-tracks { display: grid; gap: 0; min-height: 260px; }
+.playlist-tracks { display: grid; align-content: start; gap: 0; min-height: 260px; }
 .playlist-track-row { width: 100%; min-height: 54px; display: grid; grid-template-columns: 34px 42px minmax(0, 1fr); align-items: center; gap: 10px; padding: 6px 9px; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 7px; text-align: left; transition-duration: .06s; }
 .playlist-track-row:hover { background: var(--red-soft); border-color: #f3c7c7; }
 .playlist-track-row > span:first-child { color: #999; font-size: 11px; text-align: center; }
