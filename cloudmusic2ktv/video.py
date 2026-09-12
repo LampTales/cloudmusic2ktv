@@ -767,12 +767,23 @@ class FrameRenderer:
         width = bbox[2] - bbox[0]
         x = self._px(76) if align_left else self.width - self._px(76) - width
         draw.text((x, y), text, font=font, fill=inactive, stroke_width=self._px(3), stroke_fill=(8, 10, 15))
+        # Render the active text as one shaped string, just like the inactive
+        # layer above.  Re-rendering each character independently can produce
+        # a small glyph displacement (side bearings/kerning differ from the
+        # full-string shaping, especially with Docker's Noto fonts).  We only
+        # use per-character rectangles for timing; the pixels themselves come
+        # from this single, identically positioned layer.
+        active_layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+        ImageDraw.Draw(active_layer).text(
+            (x, y), text, font=font, fill=(*self.accent, 255),
+            stroke_width=self._px(3), stroke_fill=(8, 10, 15, 255)
+        )
         line_start = int(line.get("start_ms", 0))
         line_end = int(line.get("end_ms", line_start))
         units = line.get("display_units") or []
         spans = line.get("surface_spans") or []
         tokens = line.get("mora") or line.get("tokens") or []
-        for index, char in enumerate(text):
+        for index in range(len(text)):
             # Use Pillow's actual glyph advances for both layers.  A fraction
             # of the total string width is not equivalent for Japanese glyphs
             # and was the source of the visible blue/white displacement.
@@ -794,10 +805,8 @@ class FrameRenderer:
             progress = _ratio(self._current_song_time_ms, char_start, max(char_start + 1, char_end))
             if progress <= 0:
                 continue
-            layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
-            ImageDraw.Draw(layer).text((left, y), char, font=font, fill=(*self.accent, 255), stroke_width=self._px(3), stroke_fill=(8, 10, 15, 255))
             clip_right = left + round((right - left) * progress)
-            crop = layer.crop((left, 0, max(left + 1, clip_right), self.height))
+            crop = active_layer.crop((left, 0, max(left + 1, clip_right), self.height))
             frame.paste(crop.convert("RGB"), (left, 0), crop)
 
     @staticmethod
