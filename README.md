@@ -181,6 +181,7 @@ cd cloudmusic2ktv-backend
 
 ```bash
 sudo mkdir -p /var/lib/cloudmusic2ktv/models
+sudo chown "$(id -u):$(id -g)" /var/lib/cloudmusic2ktv/models
 ```
 
 ```text
@@ -191,7 +192,39 @@ sudo mkdir -p /var/lib/cloudmusic2ktv/models
         └── models--jonatasgrosman--wav2vec2-large-xlsr-53-japanese/
 ```
 
-容器以只读方式挂载该目录；模型由部署者单独准备，并遵守对应模型的许可证。
+自动标注使用的模型地址和当前验证过的 revision 如下：
+
+- [HTDemucs](https://huggingface.co/adefossez/HTDemucs)，revision
+  [`cbc8a9b1a87023b7fd74e7b3412e6321c0eab003`](https://huggingface.co/adefossez/HTDemucs/tree/cbc8a9b1a87023b7fd74e7b3412e6321c0eab003)；
+- [wav2vec2-large-xlsr-53-japanese](https://huggingface.co/jonatasgrosman/wav2vec2-large-xlsr-53-japanese)，revision
+  [`cf031e020336460d15a417eba710bbc5bb43be9a`](https://huggingface.co/jonatasgrosman/wav2vec2-large-xlsr-53-japanese/tree/cf031e020336460d15a417eba710bbc5bb43be9a)。
+
+可在后端节点联网准备缓存（容器运行时保持离线）：
+
+```bash
+python3 -m venv /tmp/cloudmusic2ktv-hf
+/tmp/cloudmusic2ktv-hf/bin/python -m pip install --upgrade huggingface_hub
+export HF_HOME=/var/lib/cloudmusic2ktv/models/huggingface
+/tmp/cloudmusic2ktv-hf/bin/hf download adefossez/HTDemucs \
+  --revision cbc8a9b1a87023b7fd74e7b3412e6321c0eab003
+/tmp/cloudmusic2ktv-hf/bin/hf download jonatasgrosman/wav2vec2-large-xlsr-53-japanese \
+  --revision cf031e020336460d15a417eba710bbc5bb43be9a
+```
+
+`hf download` 会自动生成上面所需的 `blobs`、`refs` 和 `snapshots` 结构；如果
+模型需要鉴权，先执行 `.../bin/hf auth login`。下载完成后确认容器用户可读：
+
+```bash
+sudo chmod -R a+rX /var/lib/cloudmusic2ktv/models
+```
+
+默认环境模板中的 `LYRIC_DEMUCS_MODEL_PATH` 和 `LYRIC_CTC_MODEL_PATH` 已指向这两个
+revision，一般不需要修改。若使用其他 revision，必须同时修改 `.env` 中的容器路径，
+并重新下载对应缓存。模型由部署者自行接受并遵守其许可证。
+
+容器以只读方式挂载该目录；模型由部署者单独准备。后端镜像已经包含自动标注所需的
+`lyric-align[models]`、Demucs、CTC、Torch 和 Sudachi 运行依赖，正式部署不需要再在
+宿主机安装这些 Python 包。正式 KTV 路径固定使用经过测试的 Sudachi。
 
 下载 Compose 和环境模板：
 
@@ -457,24 +490,9 @@ outputs/                     源码运行时的素材和视频
 
 视频制作页的“实验性模型预处理”会在同一个视频队列任务中依次执行 reading、Demucs 和 CTC，然后继续编码视频；用户无需先单独提交预处理任务。传统模式完全不依赖模型库。
 
-后端 Docker 镜像通过 `requirements-model.txt` 从公开 GitHub 仓库安装固定
-commit 的 `lyric-align[models]`。源码开发也可安装该文件，或使用相邻仓库的
-editable package。正式 KTV 路径固定使用经过完整测试的 Sudachi；pykakasi 和
-OpenJTalk 只作为 `lyric-align` 的实验性可选后端，不包含在 KTV 镜像中。
-
-模型权重不进入镜像，运行时必须配置本地模型路径：
-
-```text
-LYRIC_DEMUCS_MODEL_PATH=/models/huggingface/hub/models--adefossez--HTDemucs/snapshots/<revision>
-LYRIC_CTC_MODEL_PATH=/models/huggingface/hub/models--jonatasgrosman--wav2vec2-large-xlsr-53-japanese/snapshots/<revision>
-LYRIC_DEVICE=cpu                 # 或 cuda
-LYRIC_G2P_BACKEND=sudachi
-# Model sweep rendering bridges short gaps between adjacent visible characters.
-# This backend-only tuning value is not exposed in the web UI (default: 100 ms).
-CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS=100
-# 仅相邻仓库源码开发时需要；Docker 镜像不设置
-LYRIC_ALIGN_PATH=/opt/lyric_align/src
-```
+`lyric_align` 的模型预处理能力只在后端启用；前端不需要安装模型依赖。正式 KTV
+路径固定使用经过完整测试的 Sudachi；pykakasi 和 OpenJTalk 只作为 `lyric_align` 的
+实验性可选后端，不包含在 KTV 镜像中。
 
 模型对象会在单 worker 进程内缓存，后续歌曲复用已加载模型；`alignment.json`、伴奏和歌词时间结果按歌曲目录缓存。纯伴奏选项仅在模型模式下可用。
 
