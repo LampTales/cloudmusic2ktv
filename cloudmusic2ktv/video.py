@@ -38,7 +38,7 @@ SPECTRUM_CACHE_VERSION = 2
 # pauses.  Model sweep rendering bridges gaps up to this threshold.  Keep the
 # policy in the renderer (the alignment artifact remains unchanged); operators
 # can tune it without exposing another front-end control.
-MODEL_SWEEP_GAP_THRESHOLD_MS = 100
+MODEL_SWEEP_GAP_THRESHOLD_MS = 200
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 LYRIC_MARKER = re.compile(
     r"^[~*_\-\[\]{}()<>「」『』【】〔〕·•.,!?！？:：]*(?:间奏|間奏|instrumental|interlude|music)"
@@ -259,7 +259,11 @@ class FrameRenderer:
         }
         result = []
         for row in rows:
-            if not isinstance(row, dict) or not str(row.get("text") or "").strip():
+            if (
+                not isinstance(row, dict)
+                or not str(row.get("text") or "").strip()
+                or not _is_display_lyric(row)
+            ):
                 continue
             if row.get("status") == "non_sung":
                 continue
@@ -269,7 +273,12 @@ class FrameRenderer:
             item.setdefault("romanization", item.get("romaji", ""))
             item.setdefault("display_units", [])
             result.append(item)
-        return result or self.project.timeline
+        # A valid alignment artifact may intentionally contain only
+        # non-sung/metadata lines.  Returning the legacy timeline when
+        # ``result`` is empty would reintroduce those lines and render them in
+        # model mode.  Fall back only when the artifact has no usable ``lines``
+        # field at all (handled above).
+        return result
 
     @staticmethod
     def _sweep_gap_threshold_ms() -> int:

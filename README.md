@@ -81,7 +81,7 @@ $env:CLOUDMUSIC2KTV_PORT = "7860"
 | `LYRIC_DEMUCS_MODEL_PATH` | 已验证的 HTDemucs snapshot | Demucs 模型在容器内的本地路径 |
 | `LYRIC_CTC_MODEL_PATH` | 已验证的日语 wav2vec2 snapshot | CTC 模型在容器内的本地路径 |
 | `LYRIC_DEVICE` | `cpu` | 模型推理设备；使用 GPU 镜像和运行时前不要改为 `cuda` |
-| `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS` | `100` | Beta 平滑扫色合并相邻短空隙的阈值，不在前端暴露 |
+| `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS` | `200` | Beta 平滑扫色合并相邻短空隙的阈值，不在前端暴露 |
 
 后端容器内部固定监听 `0.0.0.0:7860`，`CLOUDMUSIC2KTV_BACKEND_PORT` 只调整宿主机一侧的发布端口。例如设置为 `17860` 后，端口映射为 `17860:7860`，前端应使用 `http://<BACKEND_PRIVATE_IP>:17860`。同时调整防火墙规则和健康检查地址。
 
@@ -121,7 +121,7 @@ $env:CLOUDMUSIC2KTV_PORT = "7860"
 | `LYRIC_CTC_MODEL_PATH` | 空 | Transformers CTC checkpoint 的本地路径 |
 | `LYRIC_DEVICE` | `cpu` | 模型推理设备 |
 | `LYRIC_G2P_BACKEND` | `sudachi` | 歌词读音后端；KTV 正式路径只验证 Sudachi |
-| `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS` | `100` | Beta 平滑扫色的短空隙阈值 |
+| `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS` | `200` | Beta 平滑扫色的短空隙阈值 |
 
 正式部署通常由公网代理终止 HTTPS，因此无需给后端设置 `CLOUDMUSIC2KTV_TLS_CERT` 和 `CLOUDMUSIC2KTV_TLS_KEY`。
 
