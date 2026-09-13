@@ -138,6 +138,68 @@ def test_interlude_hides_following_line_and_resets_to_left_row(tmp_path):
     assert captured[0] == ("第二句", 0, 0.5)
 
 
+def test_model_timeline_does_not_render_non_sung_alignment_lines(tmp_path):
+    project = make_project(tmp_path)
+    project = VideoProject(
+        directory=project.directory,
+        song=project.song,
+        timeline=project.timeline,
+        audio_path=project.audio_path,
+        cover_path=project.cover_path,
+        custom_background_path=project.custom_background_path,
+        alignment={
+            "schema_version": 1,
+            "lines": [
+                {"source_index": 0, "text": "第一句", "start_ms": 1000, "end_ms": 2000, "status": "non_sung", "display_units": []},
+                {"source_index": 1, "text": "第二句", "start_ms": 2000, "end_ms": 3000, "status": "ctc", "display_units": []},
+            ],
+        },
+    )
+    renderer = FrameRenderer(project, VideoOptions(alignment_mode="model", spectrum=False))
+    assert [line["text"] for line in renderer.timeline] == ["第二句"]
+
+
+def test_model_timeline_can_be_empty_when_all_alignment_lines_are_non_sung(tmp_path):
+    project = make_project(tmp_path)
+    project = VideoProject(
+        directory=project.directory,
+        song=project.song,
+        timeline=project.timeline,
+        audio_path=project.audio_path,
+        cover_path=project.cover_path,
+        custom_background_path=project.custom_background_path,
+        alignment={
+            "schema_version": 1,
+            "lines": [
+                {"source_index": 0, "text": "作詞：demo", "start_ms": 1000, "end_ms": 2000, "status": "non_sung", "display_units": []},
+            ],
+        },
+    )
+    renderer = FrameRenderer(project, VideoOptions(alignment_mode="model", spectrum=False))
+    assert renderer.timeline == []
+
+
+def test_model_timeline_skips_wrapped_marker_even_if_alignment_status_is_fallback(tmp_path):
+    project = make_project(tmp_path)
+    project = VideoProject(
+        directory=project.directory,
+        song=project.song,
+        timeline=project.timeline,
+        audio_path=project.audio_path,
+        cover_path=project.cover_path,
+        custom_background_path=project.custom_background_path,
+        alignment={
+            "schema_version": 1,
+            "lines": [
+                {"source_index": 0, "text": "~music~", "start_ms": 1000, "end_ms": 2000, "status": "fallback", "display_units": []},
+                {"source_index": 1, "text": "第二句", "start_ms": 2000, "end_ms": 3000, "status": "ctc", "display_units": []},
+            ],
+        },
+    )
+    renderer = FrameRenderer(project, VideoOptions(alignment_mode="model", spectrum=False))
+    assert [line["text"] for line in renderer.timeline] == ["第二句"]
+
+
 def test_active_lyric_is_whole_line_or_uniform_sweep(tmp_path):
     project = make_project(tmp_path)
     frame = Image.new("RGB", (1920, 1080), (0, 0, 0))
@@ -165,7 +227,7 @@ def test_model_sweep_bridges_only_short_visible_character_gaps(monkeypatch, tmp_
         {"text": "乙", "start_ms": 1150, "end_ms": 1250},  # 50 ms gap: bridge
         {"text": " ", "start_ms": 1300, "end_ms": 1320},  # explicit space: preserve
         {"text": "丙", "start_ms": 1400, "end_ms": 1500},
-        {"text": "丁", "start_ms": 1700, "end_ms": 1800},  # 200 ms: preserve
+        {"text": "丁", "start_ms": 1700, "end_ms": 1800},  # 200 ms: bridge at the default threshold
     ]
     project = VideoProject(
         **{
@@ -193,7 +255,7 @@ def test_model_sweep_bridges_only_short_visible_character_gaps(monkeypatch, tmp_
     assert smoothed[1]["end_ms"] == 1250
     assert smoothed[2]["start_ms"] == 1300
     assert smoothed[3]["start_ms"] == 1400
-    assert smoothed[4]["start_ms"] == 1700
+    assert smoothed[4]["start_ms"] == 1600
     # Rendering must not mutate the alignment artifact supplied by the caller.
     assert units[0]["end_ms"] == 1100
     assert units[1]["start_ms"] == 1150

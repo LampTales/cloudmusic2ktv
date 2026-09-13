@@ -21,7 +21,7 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       # Renderer-only smoothing for short gaps in model sweep highlighting.
-      CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS: ${CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS:-100}
+      CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS: ${CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS:-200}
     volumes:
       - ./docker-data/instance:/app/instance
       - ./docker-data/outputs:/app/outputs
