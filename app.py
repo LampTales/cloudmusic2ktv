@@ -26,6 +26,7 @@ from cloudmusic2ktv.accounts import (
     WebsiteAccountStore,
 )
 from cloudmusic2ktv.access import AllowlistError, AllowlistStore, UserNotAllowed
+from cloudmusic2ktv.access import DEFAULT_APPLICATION_LIMIT
 from cloudmusic2ktv.playlist_cache import PlaylistCache
 from cloudmusic2ktv.service import local_song_status, parse_song_id, safe_filename
 from cloudmusic2ktv.sessions import FileSessionStore
@@ -48,6 +49,7 @@ SESSION_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_SESSION_DAYS", "90")) *
 MEDIA_URL_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_MEDIA_URL_TTL_SECONDS", "3600"))
 PLAYLIST_CACHE_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_PLAYLIST_CACHE_TTL_SECONDS", "21600"))
 PLAYLIST_CACHE_MAX_ENTRIES = int(os.environ.get("CLOUDMUSIC2KTV_PLAYLIST_CACHE_MAX_ENTRIES", "32"))
+APPLICATION_LIMIT = int(os.environ.get("CLOUDMUSIC2KTV_APPLICATION_LIMIT", str(DEFAULT_APPLICATION_LIMIT)))
 IDENTITY_CONFIRMATION_TTL_SECONDS = 5 * 60
 MEDIA_SIGNING_KEY_FILE = INSTANCE / "media_signing.key"
 _media_signing_key_lock = threading.Lock()
@@ -495,6 +497,8 @@ def login() -> Any:
         return error_response("网站用户名或密码不正确", "invalid_credentials", 401)
     role = allowlist.role_for(account["netease_user_id"])
     if role is None:
+        if allowlist.application_for(account["netease_user_id"]):
+            return error_response("该账号的申请仍在等待管理员审批", "pending_approval", 403)
         return error_response("该网站账号对应的网易云账号已不在允许名单中", "not_allowed", 403)
     previous_token = None
     with auth_sessions.open(auth_token(), create=True, touch=True) as session:
@@ -552,6 +556,16 @@ def register() -> Any:
             profile = public_profile(result.get("profile") or session.client.account_status().get("profile"))
         if not profile or profile.get("userId") is None:
             raise AccountError("网易云没有返回有效的用户身份")
+        existing_application = allowlist.application_for(profile["userId"])
+        existing_account = website_accounts.by_netease_user(profile["userId"])
+        if existing_application and existing_account:
+            session.client.session.cookies.clear()
+            session.pending_qr = None
+            session.pending_identity_confirmation = None
+            auth_sessions.delete(session.token)
+            response = jsonify({"ok": True, "status": "pending", "message": "申请仍在等待管理员审批", "application": {**existing_application, "userId": str(profile["userId"])}})
+            response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
+            return response, 202
         # Validate the local account before potentially bootstrapping or
         # changing the allowlist, so a duplicate username cannot leave an
         # orphaned first administrator entry.
@@ -559,12 +573,27 @@ def register() -> Any:
         try:
             role = allowlist.authorize_login(profile)
         except UserNotAllowed:
-            session.client.session.cookies.clear()
-            session.pending_qr = None
-            session.pending_identity_confirmation = None
-            session.profile = None
-            rejected = True
-            role = None
+            application = allowlist.apply(profile, limit=APPLICATION_LIMIT)
+            if application["status"] == "pending":
+                if existing_account:
+                    session.client.session.cookies.clear()
+                    auth_sessions.delete(session.token)
+                    response = jsonify({"ok": True, "status": "pending", "message": "申请仍在等待管理员审批", "application": application.get("application")})
+                    response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
+                    return response, 202
+                account = website_accounts.create(
+                    username, password, netease_user_id=str(profile["userId"]),
+                    nickname=profile["nickname"], avatar_url=profile["avatarUrl"],
+                )
+                netease_bindings.save(profile["userId"], profile, session.client.export_cookies())
+                session.client.session.cookies.clear()
+                session.pending_qr = None
+                session.pending_identity_confirmation = None
+                auth_sessions.delete(session.token)
+                response = jsonify({"ok": True, "status": "pending", "message": "申请已提交，请等待管理员审批", "application": application.get("application")})
+                response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
+                return response, 202
+            raise
         if rejected:
             previous_token = session.token
         else:
@@ -984,7 +1013,36 @@ def video_artifact(song_id: int, filename: str) -> Any:
 @app.get("/api/admin/users")
 @admin_required
 def admin_users() -> Any:
-    return jsonify({"ok": True, "users": allowlist.snapshot()})
+    return jsonify({"ok": True, "users": allowlist.snapshot(), "applications": allowlist.applications()})
+
+
+@app.get("/api/admin/applications")
+@admin_required
+def admin_applications() -> Any:
+    return jsonify({"ok": True, "applications": allowlist.applications(), "limit": APPLICATION_LIMIT})
+
+
+@app.post("/api/admin/applications/<user_id>/approve")
+@admin_required
+def admin_approve_application(user_id: str) -> Any:
+    application = allowlist.application_for(user_id)
+    if not application:
+        return error_response("申请名单中没有该用户", "allowlist_error", 400)
+    profile = {"userId": user_id, **application}
+    entry = allowlist.add(profile, "user", added_by=str(g.current_user["netease_user_id"]))
+    return jsonify({"ok": True, "user": entry})
+
+
+@app.delete("/api/admin/applications/<user_id>")
+@admin_required
+def admin_delete_application(user_id: str) -> Any:
+    application = allowlist.application_for(user_id)
+    if not application:
+        return error_response("申请名单中没有该用户", "allowlist_error", 400)
+    allowlist.remove_application(user_id)
+    website_accounts.delete_by_netease_user(user_id)
+    netease_bindings.delete(user_id)
+    return jsonify({"ok": True, "message": "已拒绝申请并清理账号"})
 
 
 @app.get("/api/admin/search-users")

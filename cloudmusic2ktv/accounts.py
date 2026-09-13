@@ -88,6 +88,24 @@ class WebsiteAccountStore:
                 return None
             return self.public(account)
 
+    def delete_by_netease_user(self, user_id: Any) -> None:
+        normalized = self._normalize_id(user_id)
+        with self._lock:
+            value = self._read()
+            keys = [key for key, account in value["users"].items() if str(account.get("netease_user_id")) == normalized]
+            for key in keys:
+                del value["users"][key]
+            if keys:
+                self._write(value)
+
+    def by_netease_user(self, user_id: Any) -> dict[str, Any] | None:
+        normalized = self._normalize_id(user_id)
+        with self._lock:
+            for account in self._read()["users"].values():
+                if str(account.get("netease_user_id")) == normalized:
+                    return self.public(account)
+        return None
+
     @staticmethod
     def public(account: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -183,6 +201,14 @@ class NeteaseBindingStore:
             value = self._read()
             entry = value["bindings"].get(normalized)
             return dict(entry) if isinstance(entry, dict) else None
+
+    def delete(self, user_id: Any) -> None:
+        normalized = str(user_id or "").strip()
+        with self._lock:
+            value = self._read()
+            if normalized in value["bindings"]:
+                del value["bindings"][normalized]
+                self._write(value)
 
     def _read(self) -> dict[str, Any]:
         if not self.path.exists():

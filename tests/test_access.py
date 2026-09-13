@@ -1,3 +1,5 @@
+import json
+
 import app as web_app
 
 from cloudmusic2ktv.access import AllowlistStore
@@ -223,7 +225,7 @@ def test_reauthentication_continues_after_twice_used_phone_confirmation(monkeypa
     assert web_app.playlist_cache.get_playlists("2", load_cached_playlists)[0]["id"] == 2
 
 
-def test_non_listed_login_is_rejected_and_does_not_leave_a_session(monkeypatch, tmp_path):
+def test_non_listed_login_creates_pending_application(monkeypatch, tmp_path):
     sessions = FileSessionStore(tmp_path / "sessions")
     users = AllowlistStore(tmp_path / "allowlist.json")
     users.authorize_login({"userId": 101, "nickname": "管理员", "avatarUrl": ""})
@@ -245,10 +247,15 @@ def test_non_listed_login_is_rejected_and_does_not_leave_a_session(monkeypatch, 
         json={"username": "alice", "password": "password", "phone": "1", "captcha": "2", "country_code": "86"},
     )
 
-    assert response.status_code == 403
-    assert response.get_json()["error"]["code"] == "not_allowed"
+    assert response.status_code == 202
+    assert response.get_json()["status"] == "pending"
     assert [user["userId"] for user in users.snapshot()] == ["101"]
-    assert list((tmp_path / "sessions").glob("*.json")) == []
+    records = list((tmp_path / "sessions").glob("*.json"))
+    assert len(records) == 1
+    assert json.loads(records[0].read_text())["profile"] is None
+    assert users.application_for("202")["nickname"] == "陌生用户"
+    assert web_app.website_accounts.authenticate("alice", "password")["netease_user_id"] == "202"
+    assert web_app.netease_bindings.load("202") is not None
 
 
 def test_admin_can_list_and_delete_regular_users_but_not_admins(monkeypatch, tmp_path):
