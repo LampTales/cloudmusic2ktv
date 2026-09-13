@@ -1,280 +1,120 @@
-# CloudMusic2KTV 架构说明
+# CloudMusic2KTV 架构与开发指南
 
-本文记录当前代码的真实结构、进程边界、数据流、状态转换和修改约束。
-用户和部署说明见 [README.md](README.md)。
+本文面向维护者、开发者和自动化 agents，描述当前代码的边界、数据流、持久化格式、修改约束和本地调试方法。实现和测试优先于本文；改动行为时应同时更新文档和测试。
 
-本文以“实际代码优先”：当文档描述与实现或测试冲突时，应先修复文档，
-再决定是否需要修改实现。
+本仓库地址是 [github.com/LampTales/cloudmusic2ktv](https://github.com/LampTales/cloudmusic2ktv)。歌词预处理依赖位于独立仓库 [github.com/LampTales/lyric_align](https://github.com/LampTales/lyric_align)；本文只记录集成边界。
 
-## 1. 架构决策
+## 仓库边界
 
-项目采用单仓库、双运行时、双镜像结构，不拆分 Git 仓库。
+本文只描述 `local` 仓库。仓库内包含前端、后端、渲染器、测试和 `deploy/` 部署示例。
 
-```text
-frontend runtime                     backend runtime
-────────────────                     ───────────────
-frontend/index.html                  app.py
-frontend/config.js                   cloudmusic2ktv/*.py
-frontend/static/*                    instance/
-Nginx / frontend_server.py           outputs/
-        │
-        └──────── /api/* ────────────► Flask/Gunicorn
-```
+歌词读音与字级对齐由独立的 `lyric_align` 仓库作为外部依赖提供；本文只记录双方的集成契约，不把它当作本仓库目录。`deploy/` 目录中的 Compose 文件和环境模板是本仓库提供的示例，实际运行数据由部署者在仓库外的挂载目录管理。
 
-边界约定：
-
-- 后端只注册 `/api/*`，不提供页面、静态文件和前端运行配置；
-- 前端只提供静态资源，并将 `/api/*` 流式代理到后端；
-- 后端返回 artifact 的相对 URL，不生成内部主机名；
-- 浏览器永远以当前前端 origin 解析 API、预览和视频 URL；
-- 所有持久化数据只属于后端。
-
-## 2. 部署数据流
+## 运行时拓扑
 
 ```text
-客户端
-  │ GET https://public.example/ktv/
-  │ GET https://public.example/ktv/api/...
-  ▼
-公网前端服务器
-  │ 静态文件本地返回
-  │ /api/* 经私有网络/VPN 转发
-  ▼
-后端节点
-  │ 读取/写入 instance、outputs
-  │ 调用网易云、Pillow、NumPy、FFmpeg
-  ▼
-响应沿原连接返回客户端
+浏览器 ── HTTPS ──► 前端 Nginx / frontend_server.py
+                         │ 静态资源、Cookie、Range、/api 代理
+                         ▼
+                    Flask / Gunicorn（单 worker）
+              ┌──────────┼──────────┬──────────┐
+           instance/   outputs/   网易云 API  FFmpeg/lyric_align
 ```
 
-前端节点默认不缓存或持久化 MP4。视频字节经过前端节点转发，因此前端节点仍承担出口带宽，但不承担视频生成和主存储。
+后端是 API-only，不提供页面；前端是静态资源和代理。后端返回的 artifact URL 是外部代理路径，浏览器始终以当前前端 origin 解析它。正式部署中前端节点承担媒体出口带宽，后端节点保存媒体文件。
 
-## 3. 目录与运行时
+## 代码导航
 
-### 前端
+| 文件 | 职责 |
+| --- | --- |
+| `app.py` | Flask 初始化、代理修正、认证装饰器、所有路由和错误转换 |
+| `cloudmusic2ktv/access.py` | 允许名单、角色和访问撤销 |
+| `cloudmusic2ktv/accounts.py` | 网站账号密码、网易云绑定记录 |
+| `cloudmusic2ktv/sessions.py` | 服务端文件会话和 TTL |
+| `cloudmusic2ktv/netease.py` | weapi 加密、网易云请求、歌曲/歌单规范化 |
+| `cloudmusic2ktv/playlist_cache.py` | 按网易云用户隔离的 TTL/LRU 歌单缓存 |
+| `cloudmusic2ktv/service.py` | 歌曲 ID、素材下载、时间轴、源文件和衍生文件清理 |
+| `cloudmusic2ktv/lyrics.py` | LRC 解析和多语言统一时间轴 |
+| `cloudmusic2ktv/video.py` | 视频选项、帧渲染、频谱、预览、模型预处理和任务队列 |
+| `frontend/index.html`、`frontend/static/*` | 页面、状态机、API 调用、队列轮询和样式 |
+| `frontend_server.py` | 本地静态服务器与 API 开发代理 |
+| `Dockerfile.*`、`deploy/*.yml` | 两个生产镜像和分机部署示例 |
+| `tests/` | 后端、前端、渲染、持久化和部署配置契约 |
 
-`frontend/` 是生产静态资源的唯一来源：
+## 后端初始化与认证
 
-- `index.html`：页面结构；
-- `config.js`：生产默认同源 API；
-- `static/app.js`：状态机、API 调用、预览、队列轮询和投屏入口；
-- `static/app.css`：页面样式；
-- `nginx.conf.template`：静态服务和 `/api/` 流式代理。
+`app.py` 导入时创建各类 JSON/文件 store、`VideoJobManager` 和 `PlaylistCache`。认证装饰器分为 `member_required`（验证并续期）、`read_only_member_required`（只读验证，队列轮询使用）和 `admin_required`（root/admin）。允许名单按网易云 `userId` 判断，空名单首次注册自动创建 root。Cookie 是 HttpOnly、服务端存储。
 
-`frontend_server.py` 只用于本地开发。它提供同一批静态资源，并通过
-`CLOUDMUSIC2KTV_BACKEND_ORIGIN` 转发 API。`CLOUDMUSIC2KTV_FRONTEND_BASE_PATH`
-为空时使用 `/api/*`；设为 `/ktv` 时，实际服务 `/ktv/*`，并将
-`/ktv/api/*` 剥离前缀后转发到后端 `/api/*`。代理保留 Cookie、Range、
-Content-Range、Content-Length 和 Content-Disposition，并设置受控的
-`X-Forwarded-*` 请求头。
+`CLOUDMUSIC2KTV_TRUST_PROXY=1` 时只信任一层受控代理的 `X-Forwarded-*`；`CLOUDMUSIC2KTV_BASE_PATH` 同时影响 Cookie Path、artifact URL 和应用根路径。生产优先同源代理，跨域直连仅用于诊断。
 
-前端 URL 配置：
+## HTTP API 分组
 
-- `CLOUDMUSIC2KTV_API_ORIGIN` 为空时使用同源 `/api`；
-- `CLOUDMUSIC2KTV_BASE_PATH` 为空时，从页面路径推断反向代理前缀；
-- 后端与所有前端入口使用相同的外部路径前缀，域名和端口可以不同；
-- 生产部署使用同源代理，不启用浏览器跨域；
-- 显式 API origin 只保留给跨端口诊断。
+路由均位于 `/api` 下，错误统一返回 JSON；未知根路径和静态路径为 404。
 
-### 后端
+| 分组 | 典型接口 | 权限 |
+| --- | --- | --- |
+| 健康与状态 | `/healthz`、`/status` | healthz 公共 |
+| 网站认证 | `/auth/register`、`login`、`logout`、`csrf` | 按流程 |
+| 网易云绑定 | 二维码、Cookie、身份确认、绑定状态 | 已登录成员 |
+| 搜索与歌单 | `/search`、`/playlists`、`/playlists/<id>/tracks` | 成员 |
+| 素材 | `/song/inspect`、`/song/local`、`/song/download` | 成员 |
+| 视频 | `/video/preview`、`background`、`render`、`queue`、`job/<id>` | 成员 |
+| artifact | `/video/artifact/<song_id>/<filename>`、`/video/share/...` | 会话或短期签名 |
+| 管理 | `/admin/users` 及搜索、增删改角色 | root/admin |
 
-`app.py` 是 API-only Flask 入口。模块启动时创建：
+新增接口必须同步更新鉴权要求、错误码、前端调用和 `tests/test_web.py`。
 
-- `FileSessionStore(instance/sessions/)`；
-- `AllowlistStore(instance/allowlist.json)`；
-- `WebsiteAccountStore(instance/accounts.json)`；
-- `NeteaseBindingStore(instance/netease_bindings.json)`；
-- `VideoJobManager(outputs/, instance/video_jobs.json)`。
+## 网易云与素材流水线
 
-后端只允许单进程部署。Gunicorn 可以使用多线程处理轮询、下载和 Range 请求，但 worker 数必须保持为 1，否则每个 worker 会拥有独立任务队列和内存锁。
+`SongDownloadService.download()` 按“歌曲详情 → 歌词 → 播放 URL → `.part` 下载封面/音频 → 大小和 MD5 校验 → 写 metadata、原始歌词、统一时间轴 → 清理旧衍生文件”的顺序工作。重新下载只有新源文件全部成功后才删除视频、频谱、对齐和 stems；同歌有 queued/running 视频任务时拒绝下载。
 
-## 4. HTTP API
+歌曲目录包含 `metadata.json`、`audio.*`、`cover.*`、四种 LRC、`lyrics_timeline.json`，以及模型产物 `alignment.json`、`preprocessing.json`、`stems/`、频谱和 `ktv_*.mp4`/预览图。
 
-公共接口：
+## 歌词对齐与视频流水线
 
-- `GET /api/healthz`；
-- `GET /api/status`；
-- 注册、登录前所需的 `/api/auth/*` 接口。
+`lyrics.py` 将网易云多语言 LRC 合并为毫秒时间轴；`VideoProject.load()` 过滤不可显示行并加载合法 alignment。`legacy` 仅使用网易云时间轴；`model` 在同一任务中执行 lyric_align 的 reading、可选 Demucs 和 CTC，再渲染视频。纯伴奏、发音标注和平滑 sweep 要求 model。渲染器不得重新推断字级时间。
 
-名单成员接口：
+`VideoOptions` 覆盖歌词语言、扫色、背景、强调色、音频、分辨率、画质、开场、间奏和频谱。`FrameRenderer` 同时用于预览和正式视频；FFmpeg 输出 H.264/AAC。视频先写 `.part.mp4` 后原子替换，artifact 文件名通过固定正则且必须位于歌曲目录内。
 
-- 搜索和读取歌曲；
-- `GET /api/playlists`：读取当前绑定网易云账号的歌单；
-- `GET /api/playlists/<playlist_id>/tracks?offset=0&limit=50`：读取歌单歌曲分页；
-- 素材状态和下载；
-- 视频预览、自定义背景、生成、队列和任务状态；
-- artifact HEAD/Range/下载。
-- 已登录用户申请的短期签名 artifact URL，以及无 Cookie 设备对签名 URL 的读取。
+## 任务队列与恢复
 
-管理员接口：
+`VideoJobManager` 使用 `ThreadPoolExecutor(max_workers=1)`，任务和完整选项原子写入 `instance/video_jobs.json`。启动时 queued/running 恢复为 queued 并从头渲染；活跃任务按歌曲和选项指纹去重；最近 10 个完成任务展示，终态历史最多保留 50 条 done 和 50 条 error。模型进度回调只是内存诊断信息，不是 checkpoint。当前没有取消、暂停、任务所有者隔离或多后端协调。
 
-- `root` 为首个成功注册账号自动获得的不可转让所有者角色；只能通过后端直接编辑 JSON 改变；
-- `root` 可添加管理员和普通用户、在两者之间调整权限，并移除非 root 账号；
-- `admin` 只能添加和移除普通用户；
-- `root` 账号不可通过 API 添加、降级或删除；
-- 读取、搜索允许名单对 `root` 和 `admin` 开放。
+前端有活跃任务时每 1.5 秒轮询，空闲时每 15 秒轮询，页面隐藏时暂停；队列查询使用只读 session，不续期会话。
 
-所有错误返回 JSON。Flask 的 HTTPException 保持原状态；未知根路径和静态路径返回 404。
+## Artifact、URL 与前端代理
 
-## 5. 会话、代理和 URL
+artifact 接口支持 HEAD、HTTP Range、下载文件名和流式响应；代理必须保留 `Range`、`Content-Range`、`Content-Length`、`Content-Disposition`。普通 URL 需要网站 Cookie，投屏 URL 使用后端 HMAC 密钥和过期时间，设备无需网站会话。签名密钥位于 `instance/media_signing.key` 或环境变量，不能进入前端。
 
-网站会话使用随机 HttpOnly Cookie，后端状态保存在文件中。正式部署由公网 HTTPS 代理终止 TLS，后端使用受信任的 `X-Forwarded-*` 信息确定安全 Cookie 和外部路径。
+`frontend/static/app.js` 从运行时 `config.js` 读取 API origin/base path，留空时使用同源 `/api`。`frontend_server.py` 仅用于开发，生产使用 Nginx 镜像。
 
-`CLOUDMUSIC2KTV_BASE_PATH` 的作用：
+## Docker、CI 与并发约束
 
-- 设置会话 Cookie Path；
-- 为后端返回的相对 artifact URL 添加公网前缀。
+前端镜像基于 Nginx Alpine，只包含静态资源；后端镜像基于 Python slim，安装 FFmpeg、Noto CJK 和固定模型运行时，以 UID 10001、Gunicorn 单 worker 运行。模型权重运行时只读挂载到 `/models`。CI 测试后构建 amd64/arm64 镜像并发布版本标签。
 
-外层代理必须剥离公网前缀后再转发。前端 Nginx 继续保留 `X-Forwarded-Proto`、`X-Forwarded-Host` 和 `X-Forwarded-Prefix` 给后端。
+JSON 存储适合可信、低流量、单实例部署。修改会话、artifact、任务持久化、视频选项或模型 schema 时，应查阅并更新 `test_sessions.py`、`test_web.py`、`test_video.py`、`test_service.py`、`test_deployment_config.py` 和 `test_frontend.py`。
 
-artifact URL 形如：
+## 本地调试与验证
 
-```text
-/ktv/api/video/artifact/642723/ktv_720p_ca7862f7bcd0.mp4?version=...
+同机 Docker 构建适合验证当前工作区：在仓库根目录复制 `.env.example`，使用 `docker compose build && docker compose up -d`，访问 `http://127.0.0.1:8080/`。源码运行需要 Python 3.11、FFmpeg、CJK 字体和 `requirements-dev.txt`；后端运行 `app.py`，前端开发代理运行 `frontend_server.py`。模型模式另需安装 `requirements-model.txt` 并准备只读模型目录。
+
+```bash
+cd <local-repo>
+CLOUDMUSIC2KTV_HOST=127.0.0.1 CLOUDMUSIC2KTV_PORT=17861 python app.py
+CLOUDMUSIC2KTV_BACKEND_ORIGIN=http://127.0.0.1:17861 \
+CLOUDMUSIC2KTV_FRONTEND_HOST=127.0.0.1 CLOUDMUSIC2KTV_FRONTEND_PORT=18080 \
+python frontend_server.py
 ```
 
-它描述的是对外代理路径，不代表文件保存在前端节点。后端根据歌曲 ID 和白名单文件名从 `outputs/` 定位文件。
+访问 `http://127.0.0.1:18080/`；健康检查为 `http://127.0.0.1:17861/api/healthz`。常用验证：
 
-## 6. 网易云和素材流水线
-
-```text
-    NeteaseClient
-  ├─ 登录/账号状态
-  ├─ 搜索/歌曲详情/歌词
-  ├─ 用户歌单
-  ├─ 歌单详情 trackIds 与批量歌曲详情
-  └─ 播放 URL 与流式下载
-        ▼
-SongDownloadService
-  ├─ 封面和音频 .part 原子落盘
-  ├─ 大小/MD5 校验
-  ├─ metadata 和原始歌词
-  └─ 统一逐行时间轴
-        ▼
-outputs/<song_id>_<artist>_<name>/
-```
-
-网易云 Cookie 按绑定的 userId 存在后端 `instance/netease_bindings.json`，不会发送给前端或保存到前端节点磁盘。
-
-歌单列表、歌单 `trackIds` 和已解析的精简歌曲信息保存在单进程内存缓存中，默认使用 6 小时绝对有效期；访问不会延长有效期。歌曲页只补齐当前页尚未缓存的歌曲，首次搜索会补齐完整歌单索引，之后不同关键词复用同一份索引。同一歌单同时发生的读取会合并上游加载，歌曲缓存按网易云用户 ID 与歌单 ID 隔离，最多保留 32 个歌单并按 LRU 淘汰。
-
-“刷新歌单”通过独立 POST 接口清除当前用户的歌单列表、`trackIds` 和歌曲索引后重新读取；原绑定账号重新验证成功、网站账号退出也会清除当前用户缓存。到期项在读取时惰性删除，后端重启会自然清空全部内存缓存。清空搜索框、切换歌单、刷新或关闭浏览器不会清除后端缓存。当前没有更换绑定账号的功能。
-
-## 7. 视频流水线
-
-`VideoProject` 从歌曲目录读取 metadata、时间轴、音频和封面；`FrameRenderer` 同时用于预览和逐帧视频；`SpectrumData` 使用 FFmpeg 解码和 NumPy FFT；`render_video()` 将 Pillow RGB24 帧写入 FFmpeg stdin，输出 H.264/AAC MP4。
-
-保持以下约束：
-
-- 完整视频先写 `.part.mp4`，成功后原子替换；
-- artifact 文件名必须通过固定正则白名单；
-- artifact 解析路径必须仍在歌曲目录内；
-- 视频支持 HEAD 和 HTTP Range；
-- 前端和所有代理必须保留 Range 相关头。
-
-同分辨率多视频当前通过选项指纹区分。用户可选择文件，但指纹不适合作为人类可读说明；更清晰的展示元数据和文件管理留作后续独立设计。
-
-## 8. 任务持久化与恢复
-
-`VideoJobManager` 使用 `ThreadPoolExecutor(max_workers=1)`。任务包含完整 `VideoOptions`，并原子写入 `instance/video_jobs.json`。
-
-启动恢复规则：
-
-- `queued`、`running` 统一恢复为 `queued`；
-- 按持久化记录顺序重新提交；
-- 被中断的渲染从头执行；
-- 无效选项的恢复任务标记为 `error`；
-- 完成和失败记录保留用于最近任务展示；队列接口会从已有完成记录中按完成时间返回最近 10 个任务；终态历史最多保留 50 条 `done` 和 50 条 `error`，超出的旧记录会被清理。
-
-任务记录版本保持为 `1`。新增任务会保存专辑名等展示元数据，旧记录缺少这些字段时以前端默认值兼容，不需要删除或手动编辑 `instance/video_jobs.json`。
-
-前端队列轮询在有活跃任务时每 1.5 秒执行，空闲时降为 15 秒；页面隐藏时暂停，重新显示时立即刷新。队列接口使用只读成员认证，不更新或重写登录 session 文件；普通业务接口仍按原逻辑续期会话。
-
-当前没有取消、暂停、多后端实例协调和任务所有者隔离。
-
-## 9. Docker 与 CI
-
-`Dockerfile.frontend`：
-
-- 基于 Nginx Alpine；
-- 只复制 `frontend/`；
-- 使用 `BACKEND_UPSTREAM` 配置后端；
-- 不包含 Python、FFmpeg、账号或媒体文件。
-
-`Dockerfile.backend`：
-
-- 基于 Python slim；
-- 安装 FFmpeg 和 Noto CJK；
-- 只复制 `app.py`、依赖和 `cloudmusic2ktv/`；
-- 以 UID 10001 运行；
-- 挂载 `instance/`、`outputs/`；
-- Gunicorn 单 worker、四线程。
-
-GitHub Actions 在同一提交上测试代码，然后通过矩阵构建两个 amd64/arm64 镜像，并将同一份构建结果同时发布到 Docker Hub 和 GHCR。两个镜像共享版本标签但可以独立部署和回滚，因此无需拆仓库。
-
-## 10. 测试契约
-
-最低验证：
-
-```powershell
-python -m pytest -q
+```bash
+PYTHONPATH=. python -m pytest tests
 node --check frontend/static/app.js
 python -m py_compile app.py frontend_server.py cloudmusic2ktv/video.py
 docker compose config
 ```
 
-测试覆盖：
+## 已知限制
 
-- weapi 加密结构；
-- LRC 和多语言时间轴；
-- 文件会话、过期和账号权限；
-- 素材状态和路径安全；
-- 视频选项、预览、间奏、频谱和任务恢复；
-- API 鉴权、artifact Range/下载；
-- 后端 API-only 边界；
-- 前端资源、运行配置和开发代理。
-
-### 10.1 读写与请求节制
-
-- 队列状态由 `VideoJobManager.lock` 保护；`queue_status()` 只读内存，不触发
-  文件写入。
-- 任务创建、开始、渲染进度和终态会原子更新 `video_jobs.json`；模型预处理的
-  `aligned line N/M` 回调只更新运行时内存，不是可恢复 checkpoint。
-- 前端队列在有活跃任务时每 1.5 秒轮询，空闲时每 15 秒轮询，失败时指数退避；
-  页面隐藏时停止。预览请求使用 420 ms debounce，并以请求序号丢弃过期响应。
-- 歌单和歌曲详情使用带 TTL/LRU 的进程内缓存；队列查询使用只读 session 认证，
-  不会因轮询延长会话。
-- 下载、预处理和视频输出使用 `.part` 文件或临时文件后原子替换；重新下载
-  只在新素材全部成功后清理旧的衍生文件。
-
-## 11. 安全与已知限制
-
-- 不记录或提交 `instance/`、`outputs/`、Cookie 和用户媒体；
-- 后端端口只绑定私有/VPN 地址，并限制为前端节点可访问；
-- 只有受控代理才能设置 `CLOUDMUSIC2KTV_TRUST_PROXY=1`；
-- Cookie 导入只允许 HTTPS 或显式本地调试例外；
-- 当前允许名单成员共享 outputs 和全局队列，没有按用户隔离；
-- 移除允许名单成员只撤销访问权限，保留 `accounts.json` 和 `netease_bindings.json` 中的可恢复记录；
-- 普通 artifact URL 要求网站会话；投屏使用后端签发的短期 HMAC 签名 URL，设备无需携带网站 Cookie，过期后失效；
-- 前端开发代理使用 Flask，仅用于开发；生产使用 Nginx 镜像；
-- 后端 JSON 存储适合可信、低流量、单实例部署，不是多节点数据库。
-
-## 12. 本地调试启动配置
-
-```bash
-# backend（conda 环境 ktv）
-CLOUDMUSIC2KTV_HOST=0.0.0.0 \
-CLOUDMUSIC2KTV_PORT=17861 \
-CLOUDMUSIC2KTV_BASE_PATH=/ktv \
-python app.py
-
-# frontend（另一个终端，同一 conda 环境）
-CLOUDMUSIC2KTV_BACKEND_ORIGIN=http://127.0.0.1:17861 \
-CLOUDMUSIC2KTV_FRONTEND_HOST=0.0.0.0 \
-CLOUDMUSIC2KTV_FRONTEND_PORT=8080 \
-CLOUDMUSIC2KTV_FRONTEND_BASE_PATH=/ktv \
-python frontend_server.py
-```
-
-访问 `http://<本机或局域网地址>:8080/ktv/`，健康检查为
-`http://127.0.0.1:17861/api/healthz`。
+允许名单成员共享 outputs 和全局队列；后端必须单 worker；视频任务不能取消或暂停；没有多节点协调和按用户媒体隔离。改变这些边界时应先更新本文和 README。
