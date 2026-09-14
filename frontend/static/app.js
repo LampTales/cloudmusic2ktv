@@ -888,6 +888,12 @@ function closeAdminModal() {
   $("#manageAllowlist").focus();
 }
 
+function openAdminApplications() {
+  $("#adminApplicationsModal").classList.remove("hidden");
+  refreshAdminUsers();
+}
+function closeAdminApplications() { $("#adminApplicationsModal").classList.add("hidden"); }
+
 function renderAdminUserRow(user, removable) {
   const row = document.createElement("div");
   row.className = "admin-user-row";
@@ -959,9 +965,28 @@ function configureAdminRolePicker() {
 
 async function refreshAdminUsers() {
   const list = $("#adminUserList");
+  const applications = $("#adminApplicationList");
   list.replaceChildren();
+  applications.replaceChildren();
   try {
     const data = await api("/api/admin/users");
+    const badge = $("#adminApplicationBadge");
+    badge.textContent = String((data.applications || []).length);
+    badge.classList.toggle("hidden", !(data.applications || []).length);
+    for (const item of (data.applications || [])) {
+      const row = document.createElement("div"); row.className = "admin-user-row";
+      if (item.avatarUrl) { const image = document.createElement("img"); image.src = secureNeteaseMediaUrl(item.avatarUrl); image.alt = ""; row.append(image); }
+      const copy = document.createElement("div"); copy.className = "admin-user-copy";
+      const name = document.createElement("strong"); name.textContent = item.nickname || "网易云用户";
+      const id = document.createElement("small"); id.textContent = `ID ${item.userId}`;
+      copy.append(name, id); row.append(copy);
+      const approve = document.createElement("button"); approve.className = "primary compact"; approve.textContent = "批准";
+      approve.addEventListener("click", async () => { await api(`/api/admin/applications/${encodeURIComponent(item.userId)}/approve`, {method:"POST"}); refreshAdminUsers(); });
+      const reject = document.createElement("button"); reject.className = "secondary compact"; reject.textContent = "拒绝";
+      reject.addEventListener("click", async () => { await api(`/api/admin/applications/${encodeURIComponent(item.userId)}`, {method:"DELETE"}); refreshAdminUsers(); });
+      row.append(approve, reject); applications.append(row);
+    }
+    if (!(data.applications || []).length) applications.innerHTML = '<p class="admin-empty">暂无待审批申请</p>';
     if (!data.users.length) {
       list.innerHTML = '<p class="admin-empty">允许名单为空，下一次成功登录会完成初始化</p>';
       return;
@@ -1264,6 +1289,8 @@ $("#adminModal").addEventListener("click", event => { if (event.target === event
 $("#closeAdminEditModal").addEventListener("click", closeAdminEditModal);
 $("#adminEditModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeAdminEditModal(); });
 $("#adminUserSearch").addEventListener("click", searchAdminUsers);
+$("#openAdminApplications").addEventListener("click", openAdminApplications);
+$("#closeAdminApplications").addEventListener("click", closeAdminApplications);
 $("#adminUserSearchInput").addEventListener("keydown", event => { if (event.key === "Enter") searchAdminUsers(); });
 $("#refreshAdminUsers").addEventListener("click", refreshAdminUsers);
 $("#goToBuilder").addEventListener("click", () => $("#videoBuilder").scrollIntoView({behavior: "smooth", block: "start"}));

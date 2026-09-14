@@ -8,6 +8,7 @@ from typing import Any
 
 
 ALLOWLIST_VERSION = 1
+DEFAULT_APPLICATION_LIMIT = 20
 VALID_ROLES = {"root", "admin", "user"}
 MANAGED_ROLES = {"admin", "user"}
 
@@ -39,6 +40,52 @@ class AllowlistStore:
             result.sort(key=lambda item: (str(item.get("nickname") or ""), item["userId"]))
             return result
 
+    def applications(self) -> list[dict[str, Any]]:
+        with self._lock:
+            result = []
+            for user_id, entry in self._read().get("applications", {}).items():
+                item = dict(entry) if isinstance(entry, dict) else {}
+                item["userId"] = user_id
+                result.append(item)
+            return sorted(result, key=lambda item: int(item.get("applied_at") or 0))
+
+    def application_for(self, user_id: Any) -> dict[str, Any] | None:
+        normalized = self._normalize_user_id(user_id)
+        if normalized is None:
+            return None
+        with self._lock:
+            entry = self._read().get("applications", {}).get(normalized)
+            return dict(entry) if isinstance(entry, dict) else None
+
+    def apply(self, profile: dict[str, Any], *, limit: int = DEFAULT_APPLICATION_LIMIT) -> dict[str, Any]:
+        user_id = self._normalize_user_id(profile.get("userId"))
+        if user_id is None:
+            raise UserNotAllowed("网易云账号缺少有效的用户 ID")
+        with self._lock:
+            value = self._read()
+            if user_id in value["users"]:
+                role = value["users"][user_id].get("role")
+                return {"status": "allowed", "role": role}
+            applications = value.setdefault("applications", {})
+            if user_id in applications:
+                return {"status": "pending", "application": {**applications[user_id], "userId": user_id}}
+            if len(applications) >= max(1, int(limit)):
+                raise AllowlistError("申请名单已满，请稍后再试")
+            applications[user_id] = self._application_entry(profile)
+            self._write(value)
+            return {"status": "pending", "application": {**applications[user_id], "userId": user_id}}
+
+    def remove_application(self, user_id: Any) -> None:
+        normalized = self._normalize_user_id(user_id)
+        if normalized is None:
+            raise AllowlistError("用户 ID 无效")
+        with self._lock:
+            value = self._read()
+            if normalized not in value.get("applications", {}):
+                raise AllowlistError("申请名单中没有该用户")
+            del value["applications"][normalized]
+            self._write(value)
+
     def role_for(self, user_id: Any) -> str | None:
         normalized = self._normalize_user_id(user_id)
         if normalized is None:
@@ -55,6 +102,7 @@ class AllowlistStore:
         with self._lock:
             value = self._read()
             users = value["users"]
+            value.setdefault("applications", {})
             existing = users.get(user_id)
             if isinstance(existing, dict) and existing.get("role") in VALID_ROLES:
                 return str(existing["role"])
@@ -85,6 +133,7 @@ class AllowlistStore:
             value = self._read()
             if user_id in value["users"]:
                 raise AllowlistError("该用户已经在允许名单中")
+            value.setdefault("applications", {}).pop(user_id, None)
             entry = self._entry(profile, role, actor_id)
             value["users"][user_id] = entry
             self._write(value)
@@ -152,7 +201,10 @@ class AllowlistStore:
         users = value.get("users")
         if not isinstance(users, dict):
             raise AllowlistError("允许名单文件格式不正确")
-        return {"version": ALLOWLIST_VERSION, "users": users}
+        applications = value.get("applications", {})
+        if not isinstance(applications, dict):
+            applications = {}
+        return {"version": ALLOWLIST_VERSION, "users": users, "applications": applications}
 
     def _write(self, value: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -174,3 +226,8 @@ class AllowlistStore:
             "added_at": int(time.time()),
             "added_by": added_by,
         }
+
+    @staticmethod
+    def _application_entry(profile: dict[str, Any]) -> dict[str, Any]:
+        now = int(time.time())
+        return {"nickname": str(profile.get("nickname") or "网易云用户"), "avatarUrl": str(profile.get("avatarUrl") or ""), "applied_at": now, "last_seen_at": now}

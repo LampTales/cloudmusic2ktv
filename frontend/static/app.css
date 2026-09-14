@@ -461,6 +461,13 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .admin-edit-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
 .admin-edit-actions button { min-width: 118px; }
 .admin-section-heading { display: flex; align-items: center; justify-content: space-between; }
+.admin-heading-actions { display: flex; align-items: center; gap: 12px; }
+.admin-application-button { position: relative; }
+.admin-application-badge { position: absolute; top: -8px; right: -10px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #df4d59; color: white; font-size: 10px; line-height: 17px; text-align: center; }
+.admin-applications-panel { width: min(560px, calc(100vw - 32px)); }
+.admin-applications-panel .admin-user-row > img { width: 38px; height: 38px; flex: 0 0 auto; border-radius: 50%; object-fit: cover; background: var(--line); }
+.admin-applications-panel .admin-user-row .primary { background: #df4d59; border-color: #df4d59; }
+.admin-applications-panel .admin-user-row .secondary { border-color: #171b26; color: #171b26; }
 .admin-empty { margin: 14px 0 0; color: var(--muted); text-align: center; font-size: 12px; }
 .queue-detail-list { display: grid; gap: 10px; max-height: min(60vh, 520px); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 16px 3px 2px 0; }
 .queue-detail-row { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 11px; background: #fafafa; border: 1px solid var(--line); border-radius: 8px; }

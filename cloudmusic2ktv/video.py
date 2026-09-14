@@ -1122,6 +1122,11 @@ def _prepare_model_alignment(project: VideoProject, options: VideoOptions, progr
         # Vocals are an ephemeral CTC/activity input. WAV avoids an
         # unnecessary libmp3lame encode and is more robust for long stems.
         vocals_format="wav",
+        ctc_score_threshold=float(os.environ.get("LYRIC_CTC_SCORE_THRESHOLD", "-1.5")),
+        ctc_coverage_threshold=float(os.environ.get("LYRIC_CTC_COVERAGE_THRESHOLD", "0.8")),
+        ctc_margin_ms=int(os.environ.get("LYRIC_CTC_MARGIN_MS", "500")),
+        ctc_activity_margin_ms=int(os.environ.get("LYRIC_CTC_ACTIVITY_MARGIN_MS", "120")),
+        activity_confidence_threshold=float(os.environ.get("LYRIC_ACTIVITY_CONFIDENCE_THRESHOLD", "0.45")),
     )
     prepare_song(project.directory, config=config, stages=("reading", "demucs", "ctc"), progress=progress)
 

@@ -478,7 +478,7 @@
     <div class="modal-panel account-modal-panel">
       <div class="modal-heading">
         <div><p class="eyebrow">ALLOWLIST ADMIN</p><h2 id="adminModalTitle">名单管理</h2></div>
-        <button id="closeAdminModal" class="text-action modal-close" type="button" aria-label="关闭名单管理">关闭</button>
+        <div class="admin-heading-actions"><button id="openAdminApplications" class="text-action admin-application-button" type="button">申请<span id="adminApplicationBadge" class="admin-application-badge hidden">0</span></button><button id="closeAdminModal" class="text-action modal-close" type="button" aria-label="关闭名单管理">关闭</button></div>
       </div>
       <div class="admin-section">
         <p class="modal-lede">搜索网易云用户并加入允许名单。root 可调整权限；管理员只能管理普通用户。</p>
@@ -495,6 +495,14 @@
         <div class="admin-section-heading"><strong>当前允许名单</strong><button id="refreshAdminUsers" class="text-action" type="button">刷新</button></div>
         <div id="adminUserList" class="admin-list admin-user-list"></div>
       </div>
+    </div>
+  </div>
+
+  <div id="adminApplicationsModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="adminApplicationsTitle">
+    <div class="modal-panel account-modal-panel admin-applications-panel">
+      <div class="modal-heading"><div><p class="eyebrow">APPLICATIONS</p><h2 id="adminApplicationsTitle">待审批申请</h2></div><button id="closeAdminApplications" class="text-action modal-close" type="button">关闭</button></div>
+      <p class="modal-lede">批准后账号会加入允许名单；拒绝会删除申请、网站账号和网易云绑定。</p>
+      <div id="adminApplicationList" class="admin-list admin-user-list"></div>
     </div>
   </div>
 
