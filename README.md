@@ -12,10 +12,10 @@ CloudMusic2KTV 从网易云音乐获取歌曲、歌词、封面和音频，生�
 
 | 方式 | 适用场景 | 文件 |
 | --- | --- | --- |
-| 前后端分机 Docker | 推荐的正式部署 | `deploy/compose.backend.yml`、`deploy/compose.frontend.yml` |
+| 前后端分机 Docker | 推荐的正式部署 | `deploy-examples/compose.backend.yml`、`deploy-examples/compose.frontend.yml` |
 | 同机 Docker 或源码运行 | 开发和调试 | 见 [ARCHITECTURE.md](ARCHITECTURE.md) |
 
-正式部署通常让公网 HTTPS 代理指向前端节点；前端再通过私有网络或 VPN 访问后端。客户端只访问前端地址。`deploy/` 目录中的文件是本仓库提供的部署示例；实际 `instance/`、`outputs/` 和模型目录应放在部署环境的挂载目录中。
+正式部署通常让公网 HTTPS 代理指向前端节点；前端再通过私有网络或 VPN 访问后端。客户端只访问前端地址。`deploy-examples/` 目录中的文件是本仓库提供的部署示例；实际 `instance/`、`outputs/` 和模型目录应放在部署环境的挂载目录中。
 
 ## 正式部署：前后端分机
 
@@ -26,8 +26,8 @@ CloudMusic2KTV 从网易云音乐获取歌曲、歌词、封面和音频，生�
 ```bash
 mkdir -p cloudmusic2ktv-backend/docker-data/{instance,outputs}
 cd cloudmusic2ktv-backend
-curl -fsSLo compose.yml https://raw.githubusercontent.com/LampTales/cloudmusic2ktv/main/deploy/compose.backend.yml
-curl -fsSLo .env https://raw.githubusercontent.com/LampTales/cloudmusic2ktv/main/deploy/backend.env.example
+curl -fsSLo compose.yml https://raw.githubusercontent.com/LampTales/cloudmusic2ktv/main/deploy-examples/compose.backend.yml
+curl -fsSLo .env https://raw.githubusercontent.com/LampTales/cloudmusic2ktv/main/deploy-examples/backend.env.example
 ```
 
 建议使用如下目录布局。`docker-data` 可以放在其他磁盘；模型目录不是固定路径，关键是将它通过 `LYRIC_MODELS_DIR` 挂载到容器的 `/models`。
@@ -95,8 +95,8 @@ curl http://127.0.0.1:7860/api/healthz
 ```bash
 mkdir -p cloudmusic2ktv-frontend
 cd cloudmusic2ktv-frontend
-curl -fsSLo compose.yml https://raw.githubusercontent.com/LampTales/cloudmusic2ktv/main/deploy/compose.frontend.yml
-curl -fsSLo .env https://raw.githubusercontent.com/LampTales/cloudmusic2ktv/main/deploy/frontend.env.example
+curl -fsSLo compose.yml https://raw.githubusercontent.com/LampTales/cloudmusic2ktv/main/deploy-examples/compose.frontend.yml
+curl -fsSLo .env https://raw.githubusercontent.com/LampTales/cloudmusic2ktv/main/deploy-examples/frontend.env.example
 ```
 
 编辑 `.env`：
@@ -146,7 +146,7 @@ docker compose up -d
 | `LYRIC_DEMUCS_MODEL_PATH` / `LYRIC_CTC_MODEL_PATH` | 容器内模型 snapshot 路径 |
 | `LYRIC_DEVICE` | 推理设备，当前使用 `cpu` |
 
-完整默认值和同机 Compose 示例见 `.env.example`、`deploy/backend.env.example` 和 `deploy/frontend.env.example`。源码运行还支持 `CLOUDMUSIC2KTV_HOST`、`CLOUDMUSIC2KTV_PORT`、`CLOUDMUSIC2KTV_FFMPEG`、`CLOUDMUSIC2KTV_FONT_DIR`、`CLOUDMUSIC2KTV_CORS_ORIGINS` 等变量。
+完整默认值和同机 Compose 示例见 `.env.example`、`deploy-examples/backend.env.example` 和 `deploy-examples/frontend.env.example`。源码运行还支持 `CLOUDMUSIC2KTV_HOST`、`CLOUDMUSIC2KTV_PORT`、`CLOUDMUSIC2KTV_FFMPEG`、`CLOUDMUSIC2KTV_FONT_DIR`、`CLOUDMUSIC2KTV_CORS_ORIGINS` 等变量。
 
 同机 Docker 构建和源码运行只用于开发调试，包含依赖安装、本地端口和测试命令，见 [ARCHITECTURE.md](ARCHITECTURE.md) 的“本地调试与验证”。
 

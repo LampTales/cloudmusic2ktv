@@ -18,7 +18,7 @@ on:
       - ".dockerignore"
       - "docker-compose.yml"
       - ".env.example"
-      - "deploy/**"
+      - "deploy-examples/**"
       - ".github/workflows/**"
   pull_request:
     paths:
@@ -32,7 +32,7 @@ on:
       - ".dockerignore"
       - "docker-compose.yml"
       - ".env.example"
-      - "deploy/**"
+      - "deploy-examples/**"
       - ".github/workflows/**"
 
 permissions:
@@ -74,8 +74,8 @@ jobs:
       - name: Validate Docker Compose configuration
         run: |
           docker compose --env-file .env.example -f docker-compose.yml config
-          docker compose --env-file deploy/backend.env.example -f deploy/compose.backend.yml config
-          docker compose --env-file deploy/frontend.env.example -f deploy/compose.frontend.yml config
+          docker compose --env-file deploy-examples/backend.env.example -f deploy-examples/compose.backend.yml config
+          docker compose --env-file deploy-examples/frontend.env.example -f deploy-examples/compose.frontend.yml config
 
   docker:
     name: Build ${{ matrix.component }} image
