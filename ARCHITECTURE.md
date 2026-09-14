@@ -6,9 +6,9 @@
 
 ## 仓库边界
 
-本文只描述 `local` 仓库。仓库内包含前端、后端、渲染器、测试和 `deploy/` 部署示例。
+本文只描述 `local` 仓库。仓库内包含前端、后端、渲染器、测试和 `deploy-examples/` 部署示例。
 
-歌词读音与字级对齐由独立的 `lyric_align` 仓库作为外部依赖提供；本文只记录双方的集成契约，不把它当作本仓库目录。`deploy/` 目录中的 Compose 文件和环境模板是本仓库提供的示例，实际运行数据由部署者在仓库外的挂载目录管理。
+歌词读音与字级对齐由独立的 `lyric_align` 仓库作为外部依赖提供；本文只记录双方的集成契约，不把它当作本仓库目录。`deploy-examples/` 目录中的 Compose 文件和环境模板是本仓库提供的示例，实际运行数据由部署者在仓库外的挂载目录管理。
 
 ## 运行时拓扑
 
@@ -38,7 +38,7 @@
 | `cloudmusic2ktv/video.py` | 视频选项、帧渲染、频谱、预览、模型预处理和任务队列 |
 | `frontend/index.html`、`frontend/static/*` | 页面、状态机、API 调用、队列轮询和样式 |
 | `frontend_server.py` | 本地静态服务器与 API 开发代理 |
-| `Dockerfile.*`、`deploy/*.yml` | 两个生产镜像和分机部署示例 |
+| `Dockerfile.*`、`deploy-examples/*.yml` | 两个生产镜像和分机部署示例 |
 | `tests/` | 后端、前端、渲染、持久化和部署配置契约 |
 
 ## 后端初始化与认证

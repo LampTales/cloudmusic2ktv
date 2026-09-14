@@ -54,8 +54,8 @@ def test_local_compose_mounts_models_read_only_and_forces_offline_sudachi():
 
 
 def test_formal_backend_example_requires_read_only_model_mount():
-    compose = read("deploy/compose.backend.yml")
-    environment = read("deploy/backend.env.example")
+    compose = read("deploy-examples/compose.backend.yml")
+    environment = read("deploy-examples/backend.env.example")
 
     assert "${LYRIC_MODELS_DIR:?Set the host model directory}:/models:ro" in compose
     assert "LYRIC_G2P_BACKEND: sudachi" in compose
