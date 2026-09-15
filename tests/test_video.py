@@ -19,6 +19,35 @@ from cloudmusic2ktv.video import (
 import cloudmusic2ktv.video as video_module
 
 
+@pytest.mark.parametrize('enabled', [False, True])
+def test_model_alignment_passes_offset_policy_to_library(tmp_path, monkeypatch, enabled):
+    import sys
+    from types import SimpleNamespace
+    seen = []
+    class Config:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+    library = SimpleNamespace(AlignmentConfig=Config, ModelPaths=lambda **kw: kw,
+                              prepare_song=lambda *a, **kw: seen.append(kw))
+    monkeypatch.setitem(sys.modules, 'lyric_align', library)
+    monkeypatch.setattr(video_module, 'get_ffmpeg_executable', lambda: 'ffmpeg')
+    monkeypatch.setenv('LYRIC_DEMUCS_MODEL_PATH', '/models/demucs')
+    monkeypatch.setenv('LYRIC_CTC_MODEL_PATH', '/models/ctc')
+    for key in ('BOUNDARY_CHECK', 'SILENCE_MS', 'SUSTAIN_MS', 'BOUNDARY_TOLERANCE_MS', 'ACOUSTIC_VERIFY', 'ACOUSTIC_MIN_MARGIN'):
+        monkeypatch.delenv('LYRIC_OFFSET_' + key, raising=False)
+    if enabled:
+        monkeypatch.setenv('LYRIC_OFFSET_ACOUSTIC_VERIFY', 'true')
+        monkeypatch.setenv('LYRIC_OFFSET_BOUNDARY_CHECK', 'false')
+        monkeypatch.setenv('LYRIC_OFFSET_SILENCE_MS', '2500')
+    video_module._prepare_model_alignment(make_project(tmp_path), VideoOptions(alignment_mode='model'))
+    config = seen[0]['config']
+    assert config.offset_acoustic_verify is enabled
+    assert config.offset_boundary_check is not enabled
+    assert config.offset_silence_ms == (2500 if enabled else 2000)
+    assert config.offset_boundary_tolerance_ms == 800
+    assert seen[0]['stages'] == ('reading', 'demucs', 'ctc')
+
+
 def make_project(tmp_path: Path, first_start: int = 1000) -> VideoProject:
     tmp_path.mkdir(parents=True, exist_ok=True)
     cover = tmp_path / "cover.jpg"

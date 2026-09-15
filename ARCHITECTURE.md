@@ -76,6 +76,8 @@
 
 `VideoOptions` 覆盖歌词语言、扫色、背景、强调色、音频、分辨率、画质、开场、间奏和频谱。`FrameRenderer` 同时用于预览和正式视频；FFmpeg 输出 H.264/AAC。视频先写 `.part.mp4` 后原子替换，artifact 文件名通过固定正则且必须位于歌曲目录内。
 
+正片复用静态底图，频谱仅在柱形覆盖的局部区域做 alpha 合成。字体、字号适配和文字测量使用渲染器实例内的有界缓存；扫色仍按整句排版、按既有时间裁剪，仅缓存最多四张包含描边的局部高亮图层。缓存不落盘、不跨任务共享，也不保存播放进度，预览可直接跳到任意时间；恢复任务时由新渲染器重建。`tests/test_render_equivalence.py` 对照整帧合成路径验证两种对齐模式、两种分辨率、开头过渡和缓存重建的像素一致性。
+
 ## 任务队列与恢复
 
 `VideoJobManager` 使用 `ThreadPoolExecutor(max_workers=1)`，任务和完整选项原子写入 `instance/video_jobs.json`。启动时 queued/running 恢复为 queued 并从头渲染；活跃任务按歌曲和选项指纹去重；最近 10 个完成任务展示，终态历史最多保留 50 条 done 和 50 条 error。模型进度回调只是内存诊断信息，不是 checkpoint。当前没有取消、暂停、任务所有者隔离或多后端协调。
