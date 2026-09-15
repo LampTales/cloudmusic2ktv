@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LYRIC_ALIGN_REVISION = "eae1815b91e91bd0ef528d289416853fe415b6e4"
+LYRIC_ALIGN_REVISION = "79b24faa3d2897ad24813e0bfb7436b52dc21b36"
 
 
 def read(relative_path: str) -> str:

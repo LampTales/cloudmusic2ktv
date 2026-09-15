@@ -4,4 +4,4 @@
 
 # Public source archive pinned to an immutable commit. Using the archive URL
 # keeps the slim Docker image independent of the git executable.
-lyric-align[models] @ https://github.com/LampTales/lyric_align/archive/eae1815b91e91bd0ef528d289416853fe415b6e4.tar.gz
+lyric-align[models] @ https://github.com/LampTales/lyric_align/archive/79b24faa3d2897ad24813e0bfb7436b52dc21b36.tar.gz
