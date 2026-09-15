@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -226,6 +227,10 @@ class FrameRenderer:
         *,
         spectrum: "SpectrumData | None" = None,
     ):
+        # Disposable, instance-local caches: previews can seek directly to any
+        # time, and recovered jobs rebuild these from their persisted inputs.
+        self._render_caches: dict[str, OrderedDict] = {}
+        self._measure_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
         self.project = project
         self.options = options
         if options.alignment_mode == "model" and not project.alignment:
@@ -553,7 +558,7 @@ class FrameRenderer:
     def _draw_time(self, draw: ImageDraw.ImageDraw, song_time_ms: int) -> None:
         text = f"{_format_time(song_time_ms)} / {_format_time(self.project.duration_ms)}"
         font = self._font(25, bold=True, text=text)
-        bbox = draw.textbbox((0, 0), text, font=font)
+        bbox = self._text_bbox(text, font=font)
         draw.text(
             (self.width - self._px(108) - (bbox[2] - bbox[0]), self._px(91)),
             text, font=font, fill=(222, 225, 231), stroke_width=self._px(1), stroke_fill=(0, 0, 0)
@@ -561,21 +566,31 @@ class FrameRenderer:
 
     def _draw_spectrum(self, frame: Image.Image, song_time_ms: int) -> None:
         values = self.spectrum.at(song_time_ms) if self.spectrum else _preview_spectrum(64)
-        layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(layer, "RGBA")
         left, right = self._px(785), self.width - self._px(120)
         bottom, max_height = self._px(606), self._px(270)
         gap = self._px(5)
         bar_width = max(self._px(5), (right - left - gap * (len(values) - 1)) // len(values))
+        heights = [max(self._px(5), int(max_height * float(value))) for value in values]
+        if not heights:
+            return
+        # Pillow rectangles include their right/bottom edges. Use actual bar
+        # extents (including minimum widths), not the nominal layout width.
+        box = (
+            left, bottom - max(heights),
+            left + (len(values) - 1) * (bar_width + gap) + bar_width + 1, bottom + 1,
+        )
+        layer = Image.new("RGBA", (box[2] - box[0], box[3] - box[1]), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(layer, "RGBA")
         alpha = int(255 * self.options.spectrum_opacity)
-        for index, value in enumerate(values):
-            height = max(self._px(5), int(max_height * float(value)))
-            x = left + index * (bar_width + gap)
+        for index, height in enumerate(heights):
+            x = index * (bar_width + gap)
             draw.rounded_rectangle(
-                (x, bottom - height, x + bar_width, bottom),
+                (x, bottom - height - box[1], x + bar_width, bottom - box[1]),
                 radius=max(2, bar_width // 2), fill=(*self.accent, alpha)
             )
-        frame.paste(Image.alpha_composite(frame.convert("RGBA"), layer).convert("RGB"))
+        # Preserve the original alpha-composite operation on only this region.
+        region = Image.alpha_composite(frame.crop(box).convert("RGBA"), layer).convert("RGB")
+        frame.paste(region, box[:2])
 
     def _draw_lyrics(self, frame: Image.Image, song_time_ms: int) -> None:
         if not self.timeline or song_time_ms < 0:
@@ -727,7 +742,7 @@ class FrameRenderer:
         if not spans:
             return
         draw = ImageDraw.Draw(frame)
-        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=self._px(3))
+        bbox = self._text_bbox(text, font=font, stroke_width=self._px(3))
         width = bbox[2] - bbox[0]
         x = self._px(76) if align_left else self.width - self._px(76) - width
         mode = self.options.pronunciation_mode
@@ -743,10 +758,10 @@ class FrameRenderer:
                 value = str((unit.get("reading") if mode == "kana" else unit.get("romaji")) or "").strip()
                 if not value:
                     continue
-                left = x + round(draw.textlength(text[:index], font=font))
-                right = x + round(draw.textlength(text[:index + 1], font=font))
+                left = x + round(self._text_length(text[:index], font=font))
+                right = x + round(self._text_length(text[:index + 1], font=font))
                 pfont = self._fit_font(value, self._font(small_size, text=value), max(10, right - left), small_size, minimum=11)
-                pb = draw.textbbox((0, 0), value, font=pfont)
+                pb = self._text_bbox(value, font=pfont)
                 px = left + max(0, (right - left - (pb[2] - pb[0])) // 2)
                 py = y - self._px(30 if mode == "kana" else 25)
                 draw.text((px, py), value, font=pfont, fill=(205, 214, 230), stroke_width=self._px(1), stroke_fill=(8, 10, 15))
@@ -758,13 +773,13 @@ class FrameRenderer:
             surface_value = text[max(0, a):min(len(text), b)]
             if mode == "kana" and not any(_is_kanji(char) for char in surface_value):
                 continue
-            left = x + round(draw.textlength(text[:a], font=font))
-            right = x + round(draw.textlength(text[:min(len(text), b)], font=font))
+            left = x + round(self._text_length(text[:a], font=font))
+            right = x + round(self._text_length(text[:min(len(text), b)], font=font))
             value = str((span.get("reading") if mode == "kana" else span.get("romaji")) or "").strip()
             if not value:
                 continue
             pfont = self._fit_font(value, self._font(small_size, text=value), max(10, right - left), small_size, minimum=11)
-            pb = draw.textbbox((0, 0), value, font=pfont)
+            pb = self._text_bbox(value, font=pfont)
             px = left + max(0, (right - left - (pb[2] - pb[0])) // 2)
             py = y - self._px(30 if mode == "kana" else 25)
             draw.text((px, py), value, font=pfont, fill=(205, 214, 230), stroke_width=self._px(1), stroke_fill=(8, 10, 15))
@@ -772,7 +787,7 @@ class FrameRenderer:
     def _draw_model_wipe_text(self, frame: Image.Image, text: str, y: int, font: ImageFont.FreeTypeFont,
                               align_left: bool, inactive: tuple[int, int, int], line: dict[str, Any]) -> None:
         draw = ImageDraw.Draw(frame)
-        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=self._px(3))
+        bbox = self._text_bbox(text, font=font, stroke_width=self._px(3))
         width = bbox[2] - bbox[0]
         x = self._px(76) if align_left else self.width - self._px(76) - width
         draw.text((x, y), text, font=font, fill=inactive, stroke_width=self._px(3), stroke_fill=(8, 10, 15))
@@ -782,11 +797,7 @@ class FrameRenderer:
         # full-string shaping, especially with Docker's Noto fonts).  We only
         # use per-character rectangles for timing; the pixels themselves come
         # from this single, identically positioned layer.
-        active_layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
-        ImageDraw.Draw(active_layer).text(
-            (x, y), text, font=font, fill=(*self.accent, 255),
-            stroke_width=self._px(3), stroke_fill=(8, 10, 15, 255)
-        )
+        active_layer, origin = self._active_text_layer(text, font, x, y)
         line_start = int(line.get("start_ms", 0))
         line_end = int(line.get("end_ms", line_start))
         units = line.get("display_units") or []
@@ -796,8 +807,8 @@ class FrameRenderer:
             # Use Pillow's actual glyph advances for both layers.  A fraction
             # of the total string width is not equivalent for Japanese glyphs
             # and was the source of the visible blue/white displacement.
-            left = x + round(draw.textlength(text[:index], font=font))
-            right = x + round(draw.textlength(text[: index + 1], font=font))
+            left = x + round(self._text_length(text[:index], font=font))
+            right = x + round(self._text_length(text[: index + 1], font=font))
             if right <= left:
                 continue
             if units and index < len(units):
@@ -815,8 +826,7 @@ class FrameRenderer:
             if progress <= 0:
                 continue
             clip_right = left + round((right - left) * progress)
-            crop = active_layer.crop((left, 0, max(left + 1, clip_right), self.height))
-            frame.paste(crop.convert("RGB"), (left, 0), crop)
+            self._paste_active_text(frame, active_layer, origin, left, max(left + 1, clip_right))
 
     @staticmethod
     def _char_mora_indices(spans: list[dict[str, Any]], index: int, tokens: list[dict[str, Any]], text_length: int) -> set[int]:
@@ -848,7 +858,7 @@ class FrameRenderer:
         progress: float | None,
     ) -> None:
         draw = ImageDraw.Draw(frame)
-        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=self._px(3))
+        bbox = self._text_bbox(text, font=font, stroke_width=self._px(3))
         width = bbox[2] - bbox[0]
         x = self._px(76) if align_left else self.width - self._px(76) - width
         draw.text(
@@ -856,16 +866,10 @@ class FrameRenderer:
         )
         if progress is None:
             return
-        active_layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
-        active_draw = ImageDraw.Draw(active_layer)
-        active_draw.text(
-            (x, y), text, font=font, fill=(*self.accent, 255),
-            stroke_width=self._px(3), stroke_fill=(8, 10, 15, 255)
-        )
+        active_layer, origin = self._active_text_layer(text, font, x, y)
         clip_right = x + int(width * max(0, min(1, progress)))
         if clip_right > x:
-            cropped = active_layer.crop((x, 0, clip_right, self.height))
-            frame.paste(cropped.convert("RGB"), (x, 0), cropped)
+            self._paste_active_text(frame, active_layer, origin, x, clip_right)
 
     def _draw_plain_text(
         self,
@@ -877,7 +881,7 @@ class FrameRenderer:
         fill: tuple[int, int, int],
     ) -> None:
         draw = ImageDraw.Draw(frame)
-        bbox = draw.textbbox((0, 0), text, font=font)
+        bbox = self._text_bbox(text, font=font)
         width = bbox[2] - bbox[0]
         x = self._px(78) if align_left else self.width - self._px(78) - width
         draw.text((x, y), text, font=font, fill=fill, stroke_width=self._px(2), stroke_fill=(8, 10, 15))
@@ -904,10 +908,69 @@ class FrameRenderer:
             return _hex_to_rgb(self.options.accent_color)
         return _cover_accent(self.cover)
 
+    def _cached(self, name: str, key: Any, create: Callable[[], Any], *, limit: int = 256) -> Any:
+        cache = self._render_caches.setdefault(name, OrderedDict())
+        if key not in cache:
+            cache[key] = create()
+            if len(cache) > limit:
+                cache.popitem(last=False)
+        cache.move_to_end(key)
+        return cache[key]
+
+    def _text_bbox(self, text: str, *, font: ImageFont.FreeTypeFont, stroke_width: int = 0) -> tuple[int, int, int, int]:
+        return self._cached(
+            "text_boxes", (text, font, stroke_width),
+            lambda: self._measure_draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width),
+        )
+
+    def _text_length(self, text: str, *, font: ImageFont.FreeTypeFont) -> float:
+        return self._cached(
+            "text_lengths", (text, font),
+            lambda: self._measure_draw.textlength(text, font=font), limit=2048,
+        )
+
+    def _active_text_layer(self, text: str, font: ImageFont.FreeTypeFont, x: int, y: int) -> tuple[Image.Image, tuple[int, int]]:
+        def create() -> tuple[Image.Image, tuple[int, int]]:
+            a, b, c, d = self._text_bbox(text, font=font, stroke_width=self._px(3))
+            # Clip to the same canvas as the old full-frame layer. Include
+            # glyph bearings and stroke extents; do not rasterize per glyph.
+            left, top = max(0, x + a), max(0, y + b)
+            right, bottom = min(self.width, x + c), min(self.height, y + d)
+            layer = Image.new("RGBA", (max(1, right - left), max(1, bottom - top)), (0, 0, 0, 0))
+            ImageDraw.Draw(layer).text(
+                (x - left, y - top), text, font=font, fill=(*self.accent, 255),
+                stroke_width=self._px(3), stroke_fill=(8, 10, 15, 255),
+            )
+            return layer, (left, top)
+
+        # Keep only a handful of local bitmaps; never retain a full-frame
+        # RGBA image for every lyric in a song.
+        return self._cached("active_text", (text, font, x, y), create, limit=4)
+
+    @staticmethod
+    def _paste_active_text(frame: Image.Image, layer: Image.Image, origin: tuple[int, int], left: int, right: int) -> None:
+        x, y = origin
+        left, right = max(left, x), min(right, x + layer.width)
+        if right <= left:
+            return
+        cropped = layer.crop((left - x, 0, right - x, layer.height))
+        # Match the old RGB source + RGBA mask blending, including edge alpha.
+        frame.paste(cropped.convert("RGB"), (left, y), cropped)
+
     def _font(
         self, size: int, bold: bool = False, text: str | None = None
     ) -> ImageFont.FreeTypeFont:
-        return ImageFont.truetype(str(_font_path(bold, text)), self._px(size))
+        # Font selection depends on the script category, not individual words.
+        value = text or ""
+        category = (
+            bold, any("\u3040" <= char <= "\u30ff" for char in value),
+            any("\u3400" <= char <= "\u9fff" for char in value),
+        )
+        path = self._cached("font_paths", category, lambda: _font_path(bold, text), limit=8)
+        return self._cached(
+            "fonts", (path, self._px(size)),
+            lambda: ImageFont.truetype(str(path), self._px(size)), limit=128,
+        )
 
     def _fit_font(
         self,
@@ -919,12 +982,15 @@ class FrameRenderer:
         bold: bool = False,
         minimum: int = 18,
     ) -> ImageFont.FreeTypeFont:
-        draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
-        font = self._font(size, bold=bold, text=text)
-        while size > minimum and draw.textbbox((0, 0), text, font=font)[2] > max_width:
-            size -= 2
-            font = self._font(size, bold=bold, text=text)
-        return font
+        def fit() -> ImageFont.FreeTypeFont:
+            fitted_size = size
+            font = self._font(fitted_size, bold=bold, text=text)
+            while fitted_size > minimum and self._text_bbox(text, font=font)[2] > max_width:
+                fitted_size -= 2
+                font = self._font(fitted_size, bold=bold, text=text)
+            return font
+
+        return self._cached("fitted_fonts", (text, max_width, size, bold, minimum), fit)
 
     def _center_text(
         self,
@@ -937,7 +1003,7 @@ class FrameRenderer:
         stroke_width: int,
         stroke_fill: tuple[int, int, int, int] = (0, 0, 0, 150),
     ) -> None:
-        bbox = draw.textbbox((0, 0), text, font=font)
+        bbox = self._text_bbox(text, font=font)
         x = (self.width - (bbox[2] - bbox[0])) // 2
         draw.text((x, y), text, font=font, fill=fill, stroke_width=stroke_width, stroke_fill=stroke_fill)
 
