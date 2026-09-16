@@ -12,6 +12,8 @@ let accountRole = null;
 let neteaseBound = false;
 let selectedSongLocal = {status: "missing", ready: false, message: "尚未选择歌曲"};
 let selectedSongVideos = [];
+const castUrlCache = new Map();
+const castUrlPending = new Map();
 let videoStatusRequest = 0;
 let lastQueueArtifactUrl = null;
 let queueTimer = null;
@@ -421,10 +423,45 @@ function updateCastDirectLink() {
   link.href = url;
   if (media.src !== url) {
     media.src = url;
+    media.preload = "metadata";
     media.load();
   }
   browserButton.disabled = false;
+  // Obtain the device-safe URL before the user's click. Calling prompt() only
+  // after an awaited request can consume the transient user activation that
+  // browsers require for their device picker.
+  prefetchCastUrl(video);
   updateBrowserCastHelp();
+}
+
+function castUrlCacheKey(video) {
+  return `${selectedSong?.id || ""}/${video?.filename || ""}`;
+}
+
+async function prefetchCastUrl(video) {
+  if (!selectedSong || !video) return;
+  const key = castUrlCacheKey(video);
+  if (castUrlCache.has(key)) return castUrlCache.get(key);
+  if (castUrlPending.has(key)) return castUrlPending.get(key);
+  const pending = requestCastUrl(video).catch(error => {
+    castUrlPending.delete(key);
+    throw error;
+  });
+  castUrlPending.set(key, pending);
+  try {
+    const value = await pending;
+    castUrlPending.delete(key);
+    castUrlCache.set(key, value);
+    const media = $("#castMediaElement");
+    if (media.src !== value) {
+      media.src = value;
+      media.preload = "metadata";
+      media.load();
+    }
+    return value;
+  } catch {
+    return null;
+  }
 }
 
 function browserCastMethod() {
@@ -460,18 +497,6 @@ async function tryBrowserCast() {
   const selectedVideo = selectedCastVideo();
   if (!selectedSong || !selectedVideo) return notify("这首歌还没有可投屏的本地视频", true);
   const media = $("#castMediaElement");
-  let url;
-  try {
-    url = await requestCastUrl(selectedVideo);
-  } catch (error) {
-    notify(error.message || "无法生成投屏地址", true);
-    return;
-  }
-  if (media.src !== url) {
-    media.src = url;
-    media.load();
-  }
-
   const method = browserCastMethod();
   if (!method) {
     const reason = !window.isSecureContext
@@ -483,6 +508,16 @@ async function tryBrowserCast() {
 
   try {
     if (method === "remote-playback") {
+      // The signed URL is prefetched while the page is idle. Do not await a
+      // network request between the click and prompt(), or the browser may
+      // reject the picker because transient user activation has expired.
+      const url = castUrlCache.get(castUrlCacheKey(selectedVideo));
+      if (!url) throw Object.assign(new Error("投屏地址尚未准备好，请稍候再试"), {name: "NotReadyError"});
+      if (media.src !== url) {
+        media.src = url;
+        media.preload = "metadata";
+        media.load();
+      }
       await media.remote.prompt();
       const states = {connected: "已连接远程设备", connecting: "正在连接远程设备", disconnected: "未连接远程设备"};
       notify(states[media.remote.state] || "浏览器设备选择器已关闭");
@@ -493,14 +528,16 @@ async function tryBrowserCast() {
   } catch (error) {
     if (error?.name === "AbortError") return;
     const messages = {
-      NotAllowedError: "浏览器拒绝打开设备列表；请确认页面使用 HTTPS，并直接点击实验按钮重试",
+      NotAllowedError: "浏览器未授权远程播放，或没有可用的兼容设备；请确认已直接点击按钮，并检查浏览器支持的投屏设备",
+      InvalidAccessError: "浏览器没有保留本次点击的用户操作；请直接点击投屏按钮重试",
       NotFoundError: "浏览器没有发现可用的远程播放设备",
       NotSupportedError: "浏览器不支持将这个 MP4 发送到远程设备",
       InvalidStateError: "视频尚未准备好，无法请求远程播放",
+      NotReadyError: "投屏地址仍在准备中，请稍候片刻再点击",
     };
     const message = messages[error?.name] || error?.message || "浏览器投屏请求失败";
     updateBrowserCastHelp(message);
-    notify(message, true);
+    notify(`${message}（${error?.name || "未知错误"}）`, true);
   }
 }
 
