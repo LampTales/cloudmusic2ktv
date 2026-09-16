@@ -65,3 +65,37 @@ def test_cleanup_removes_invalid_and_expired_session_files(tmp_path):
     )
     assert store.cleanup_expired() == 2
     assert list(tmp_path.glob("*.json")) == []
+
+
+def test_user_deletion_clears_all_related_sessions_and_preserves_others(tmp_path):
+    store = FileSessionStore(tmp_path)
+    tokens = []
+    records = [
+        {"profile": {"netease_user_id": "2"}},
+        {"profile": {"netease_user_id": "2"}},
+        {"pending_qr": {"status": "verified", "profile": {"userId": 2}}},
+        {"pending_identity_confirmation": {"profile": {"userId": 2}}},
+        {"profile": {"netease_user_id": "3"}},
+        {"pending_qr": {"status": "waiting"}},
+    ]
+    for record in records:
+        with store.open(None, create=True) as session:
+            tokens.append(session.token)
+            for field, value in record.items():
+                setattr(session, field, value)
+    assert store.delete_by_netease_user(2) == 4
+    for index, token in enumerate(tokens):
+        with store.open(token) as session:
+            assert (session is None) == (index < 4)
+    assert store.delete_by_netease_user(2) == 0
+
+
+def test_deleted_session_is_not_recreated_by_open_context(tmp_path):
+    store = FileSessionStore(tmp_path)
+    with store.open(None, create=True) as session:
+        token = session.token
+        session.profile = {"netease_user_id": "2"}
+    with store.open(token) as session:
+        store.delete(token)
+    with store.open(token) as session:
+        assert session is None

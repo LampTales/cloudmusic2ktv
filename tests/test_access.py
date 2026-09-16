@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 import app as web_app
 
 from cloudmusic2ktv.access import AllowlistStore
@@ -8,6 +10,15 @@ from cloudmusic2ktv.netease import NeteaseClient, NeteaseError
 from cloudmusic2ktv.playlist_cache import PlaylistCache
 from cloudmusic2ktv.sessions import FileSessionStore
 from tests.helpers import set_session_cookie
+
+
+@pytest.fixture(autouse=True)
+def isolated_account_stores(monkeypatch, tmp_path):
+    # Admin deletion now also mutates account/binding stores. Never let an
+    # older allowlist-only test fall through to the application's real files.
+    monkeypatch.setattr(web_app, "website_accounts", WebsiteAccountStore(tmp_path / "accounts.json"))
+    monkeypatch.setattr(web_app, "netease_bindings", NeteaseBindingStore(tmp_path / "bindings.json"))
+    monkeypatch.setattr(web_app, "playlist_cache", PlaylistCache())
 
 
 def member_client(monkeypatch, tmp_path, *, user_id="2", role="user"):
@@ -657,3 +668,74 @@ def test_cookie_registration_requires_csrf(monkeypatch, tmp_path):
     )
     assert response.status_code == 400
     assert response.get_json()["error"]["code"] == "account_error"
+
+
+@pytest.mark.parametrize("operation", ["member", "application"])
+def test_admin_cleanup_removes_credentials_binding_and_cache(monkeypatch, tmp_path, operation):
+    client = member_client(monkeypatch, tmp_path, user_id="1", role="root")
+    users = web_app.allowlist
+    accounts = web_app.website_accounts
+    bindings = web_app.netease_bindings
+    profile = {"userId": 202, "nickname": "待删除用户"}
+    if operation == "member":
+        users.add(profile, "user", added_by="1")
+        route = "/api/admin/users/202"
+    else:
+        users.apply(profile)
+        route = "/api/admin/applications/202"
+    for user_id, username in [(202, "target"), (303, "untouched")]:
+        accounts.create(username, "password", netease_user_id=str(user_id), nickname=username)
+        bindings.save(user_id, {"nickname": username}, [{"name": "MUSIC_U", "value": "secret"}])
+        web_app.playlist_cache.get_playlists(user_id, lambda: [{"id": "old"}])
+    with web_app.auth_sessions.open(None, create=True) as session:
+        session.profile = {"netease_user_id": "202", "username": "target"}
+        old_token = session.token
+    former_member = web_app.app.test_client()
+    set_session_cookie(former_member, old_token)
+
+    response = client.delete(route)
+    assert response.status_code == 200
+    assert users.role_for(202) is None
+    assert users.application_for(202) is None
+    assert accounts.by_netease_user(202) is None
+    assert accounts.authenticate("target", "password") is None
+    assert bindings.load(202) is None
+    assert web_app.playlist_cache.get_playlists(202, lambda: [{"id": "fresh"}]) == [{"id": "fresh"}]
+    assert former_member.get("/api/playlists").status_code == 401
+    assert former_member.post("/api/auth/login", json={"username": "target", "password": "password"}).status_code == 401
+    assert accounts.authenticate("untouched", "password") is not None
+    assert bindings.load(303) is not None
+    assert web_app.playlist_cache.get_playlists(303, lambda: []) == [{"id": "old"}]
+
+    # Released username and NetEase identity can go through registration again.
+    monkeypatch.setattr(NeteaseClient, "login_with_captcha", lambda *a, **kw: {"code": 200, "profile": profile})
+    registration = web_app.app.test_client().post("/api/auth/register", json={
+        "username": "target", "password": "new-password", "phone": "1", "captcha": "2",
+    })
+    assert registration.status_code == 202
+    assert users.application_for(202)
+    assert accounts.authenticate("target", "new-password") is not None
+    assert client.post("/api/admin/applications/202/approve").status_code == 200
+    # Even when this NetEase identity is approved again, the old token is gone.
+    set_session_cookie(former_member, old_token)
+    assert former_member.get("/api/playlists").status_code == 401
+
+
+@pytest.mark.parametrize("actor_id,actor_role,target_id,target_role", [
+    ("1", "root", "1", "root"),
+    ("2", "admin", "3", "admin"),
+    ("2", "user", "3", "user"),
+])
+def test_forbidden_deletion_never_cleans_account_data(monkeypatch, tmp_path, actor_id, actor_role, target_id, target_role):
+    client = member_client(monkeypatch, tmp_path, user_id=actor_id, role=actor_role)
+    if target_id != "1":
+        web_app.allowlist.add({"userId": target_id, "nickname": "target"}, target_role, added_by="1")
+    accounts = web_app.website_accounts
+    bindings = web_app.netease_bindings
+    accounts.create("target", "password", netease_user_id=target_id, nickname="target")
+    bindings.save(target_id, {"nickname": "target"}, [{"name": "MUSIC_U", "value": "secret"}])
+    response = client.delete(f"/api/admin/users/{target_id}")
+    assert response.status_code in {400, 403}
+    assert accounts.authenticate("target", "password") is not None
+    assert bindings.load(target_id) is not None
+    assert web_app.allowlist.role_for(target_id) == target_role
