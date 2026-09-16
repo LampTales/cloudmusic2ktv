@@ -47,6 +47,8 @@
 
 `CLOUDMUSIC2KTV_TRUST_PROXY=1` 时只信任一层受控代理的 `X-Forwarded-*`；`CLOUDMUSIC2KTV_BASE_PATH` 同时影响 Cookie Path、artifact URL 和应用根路径。生产优先同源代理，跨域直连仅用于诊断。
 
+管理员删除成员或拒绝注册申请时，会清理对应网站账号、网易云绑定 Cookie、歌单缓存和可关联到该网易云用户的会话（含已验证的待注册身份）；删除成员还会移出允许名单，root 不可删除。再次使用需重新注册并按允许名单规则审批，原网站会话不会因重新批准而恢复。此操作不清理共享素材、视频或任务。
+
 ## HTTP API 分组
 
 路由均位于 `/api` 下，错误统一返回 JSON；未知根路径和静态路径为 404。
@@ -55,7 +57,7 @@
 | --- | --- | --- |
 | 健康与状态 | `/healthz`、`/status` | healthz 公共 |
 | 网站认证 | `/auth/register`、`login`、`logout`、`csrf` | 按流程 |
-| 网易云绑定 | 二维码、Cookie、身份确认、绑定状态 | 已登录成员 |
+| 网易云绑定 | 二维码、Cookie、身份确认、绑定状态 | 注册验证可匿名；重新验证和绑定状态需成员权限 |
 | 搜索与歌单 | `/search`、`/playlists`、`/playlists/<id>/tracks` | 成员 |
 | 素材 | `/song/inspect`、`/song/local`、`/song/download` | 成员 |
 | 视频 | `/video/preview`、`background`、`render`、`queue`、`job/<id>` | 成员 |
@@ -63,6 +65,14 @@
 | 管理 | `/admin/users` 及搜索、增删改角色 | root/admin |
 
 新增接口必须同步更新鉴权要求、错误码、前端调用和 `tests/test_web.py`。
+
+二维码登录先在浏览器获取网易云设备令牌，后端尝试通过 `/weapi/middle/device-info/web/get` 注册设备。只有网易云下发的有效 `sDeviceId` Cookie 才用于生成 `chainId`，否则沿用官方 `unknown-*` 回退；设备 Cookie 随服务端会话保存。设备 ID 中合法的 `%HH` 转义（如 `%2F`）保持原样，与官方脚本直接拼接二维码 URL 和请求头的行为一致，不额外解码或重复编码。设备注册和普通扫码成功流程已在本地实测通过；不同域名、出口 IP 下的风控结果仍可能不同。
+
+前端只缓存 SDK 加载结果，每次轮询重新获取设备令牌。初始轮询不传 `secureCaptcha`；收到 `8821` 时，`/api/auth/qr/poll` 返回 `verification_required` 并保留原二维码和五分钟有效期，前端暂停请求、加载官方易盾验证组件，用户验证成功后以返回的字符串凭证继续轮询。每张二维码最多弹出两次验证；取消、超时或 SDK 不可用时提示刷新或改用其他登录方式。`8830` 属于未实现的进一步验证流程，返回明确提示。不得把 `secureCaptcha` 写成布尔开关，也不得拼造 `YD-*` 设备标识。
+
+二维码注册继续走网站账号创建和允许名单审批流程，前端展示后端返回的待审批信息；扫码成功本身不会赋予网站成员权限。二维码重新验证在轮询时复查成员权限，且只能更新原绑定账号；成功后与短信/Cookie 方式一致，清理该用户歌单缓存、临时验证状态和 Cookie，并更新网站 CSRF 凭证。错账号或成员权限已撤销时，不覆盖原绑定。网站日常登录仍使用本地用户名和密码。
+
+回归验证：`PYTHONPATH=. python -m pytest tests/test_qr_auth.py tests/test_access.py tests/test_web.py tests/test_sessions.py tests/test_crypto.py tests/test_frontend.py`；前端异步行为用 `node tests/test_qr_frontend.js` 验证（在仓库根目录运行）。这些测试使用模拟响应，实际网易云登录及验证组件的域名限制须另行验证。
 
 ## 网易云与素材流水线
 

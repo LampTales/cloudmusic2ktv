@@ -53,6 +53,7 @@ class FileSessionStore:
         resolved = self._valid_token(token)
         record = None
         lock = None
+        is_new = False
         if resolved:
             lock = self._lock_for(resolved)
             lock.acquire()
@@ -69,6 +70,7 @@ class FileSessionStore:
                 yield None
                 return
             resolved = self._new_token()
+            is_new = True
             lock = self._lock_for(resolved)
             lock.acquire()
             now = int(time.time())
@@ -112,7 +114,9 @@ class FileSessionStore:
                     client.session.cookies.clear()
                 raise
             finally:
-                if persist:
+                # A nested authorization check may delete this session.
+                # Do not resurrect it when the outer context exits.
+                if persist and (is_new or self._path(resolved).exists()):
                     now = int(time.time())
                     self._write(
                         resolved,
@@ -171,6 +175,37 @@ class FileSessionStore:
                         removed += 1
                     except FileNotFoundError:
                         pass
+        return removed
+
+    def delete_by_netease_user(self, user_id: Any) -> int:
+        """Remove the user's site sessions and verified pending identities."""
+        target = str(user_id or "").strip()
+        if not target.isdigit() or int(target) <= 0:
+            raise ValueError("invalid NetEase user ID")
+        removed = 0
+        for path in self.directory.glob("*.json"):
+            if not re.fullmatch(r"[0-9a-f]{64}", path.stem):
+                continue
+            # Session filenames are token hashes; use the same lock as open().
+            with self._locks_guard:
+                lock = self._locks.setdefault(path.stem, threading.RLock())
+            with lock:
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                identities = [record.get("profile")]
+                for field in ("pending_qr", "pending_identity_confirmation"):
+                    pending = record.get(field)
+                    if isinstance(pending, dict):
+                        identities.append(pending.get("profile"))
+                if any(isinstance(profile, dict) and str(
+                    profile.get("netease_user_id") or profile.get("userId") or ""
+                ) == target for profile in identities):
+                    path.unlink(missing_ok=True)
+                    removed += 1
         return removed
 
     def _read(self, token: str) -> dict[str, Any] | None:

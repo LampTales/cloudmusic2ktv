@@ -71,6 +71,9 @@ jobs:
       - name: Check JavaScript syntax
         run: node --check frontend/static/app.js
 
+      - name: Check QR login browser behavior
+        run: node tests/test_qr_frontend.js
+
       - name: Validate Docker Compose configuration
         run: |
           docker compose --env-file .env.example -f docker-compose.yml config

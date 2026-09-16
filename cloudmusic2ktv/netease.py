@@ -117,14 +117,40 @@ class NeteaseClient:
         self._save_cookies()
         return data
 
+    def prepare_qr_device(self, token: str, *, user_agent: str = "") -> str:
+        """Register the fingerprint with NetEase; only trust its device cookie.
+
+        The official NesDeviceId helper calls this endpoint with WebOnline.
+        Failure is non-fatal: the web login also supports an unknown device.
+        """
+        if token:
+            try:
+                self.weapi(
+                    "/weapi/middle/device-info/web/get",
+                    {"ydDeviceType": "WebOnline", "ydDeviceToken": token},
+                    extra_headers={"User-Agent": user_agent[:512]} if user_agent else None,
+                )
+            except NeteaseError:
+                pass
+        for cookie in self.session.cookies:
+            # The official web client reads document.cookie verbatim. Device
+            # IDs can contain escaped base64 characters such as %2F and %2B;
+            # retain these escapes in both the chain header and QR URL.
+            if (cookie.name == "sDeviceId" and cookie.domain in COOKIE_DOMAINS
+                    and not cookie.is_expired()
+                    and len(cookie.value) <= 128
+                    and re.fullmatch(r"(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+", cookie.value)):
+                return cookie.value
+        return ""
+
     def qr_login_start(self, *, user_agent: str = "") -> dict[str, str]:
         """Create a QR login challenge using the current web login API."""
-        headers = {"x-loginmethod": "QrCode"}
+        headers = {}
         if user_agent:
             headers["User-Agent"] = user_agent[:512]
         data = self.weapi(
             "/weapi/login/qrcode/unikey",
-            {"type": "1", "noCheckToken": "true"},
+            {"type": 1, "noCheckToken": True},
             extra_headers=headers,
         )
         self._require_code(data)
@@ -138,7 +164,7 @@ class NeteaseClient:
         key: str,
         chain_id: str,
         *,
-        secure_captcha: Any = True,
+        secure_captcha: str | None = None,
         yd_device_token: str = "",
         user_agent: str = "",
     ) -> dict[str, Any]:
@@ -147,8 +173,8 @@ class NeteaseClient:
         The current web client treats 800/801/802/803 as QR state codes, so
         these are returned to the caller instead of being raised as errors.
         """
-        data = {"type": "1", "noCheckToken": "true", "key": key}
-        if secure_captcha is not None:
+        data = {"type": 1, "noCheckToken": True, "key": key}
+        if secure_captcha:
             data["secureCaptcha"] = secure_captcha
         # The web client includes this field even when fingerprint generation
         # fails; retaining it keeps the encrypted payload shape compatible.
@@ -167,12 +193,14 @@ class NeteaseClient:
         code = response.get("code")
         if code == 803:
             self._save_cookies()
-        elif code not in {800, 801, 802, 803, 810, 811, 8821}:
+        elif code not in {800, 801, 802, 803, 810, 811, 8821, 8830}:
             self._require_code(response)
         return response
 
     @staticmethod
     def qr_login_url(key: str, chain_id: str) -> str:
+        # Match the official client's direct concatenation: sDeviceId is
+        # already escaped. Encoding chain_id again would turn %2F into %252F.
         return (
             f"{BASE_URL}/st/platform/scanlogin?codekey={key}"
             f"&chainId={chain_id}&hdw_device=web&hdw_appid=web&hitExp=1"

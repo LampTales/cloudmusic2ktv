@@ -30,7 +30,8 @@ let cookieCsrfToken = "";
 let qrPollTimer = null;
 let qrExpireTimer = null;
 let qrFlowId = 0;
-let ydDeviceTokenPromise = null;
+const qrSdkLoads = new Map();
+let cancelQrVerification = null;
 let adminEditUser = null;
 let pendingIdentityConfirmationPurpose = null;
 let verifiedIdentityConfirmationPurpose = null;
@@ -123,27 +124,86 @@ function setNeteaseThumbnail(image, value, size, retinaSize = size * 2) {
   }
 }
 
-function getYdDeviceToken() {
-  if (ydDeviceTokenPromise) return ydDeviceTokenPromise;
-  ydDeviceTokenPromise = new Promise(resolve => {
-    const finish = async () => {
-      try {
-        if (typeof window.createNEFingerprint !== "function") return resolve("");
-        const result = await window.createNEFingerprint({appId: "9d0ef7e0905d422cba1ecf7e73d77e67", timeout: 6000}).getToken();
-        resolve(String(result?.token || ""));
-      } catch { resolve(""); }
+function loadQrSdk(url, ready) {
+  if (ready()) return Promise.resolve();
+  if (qrSdkLoads.has(url)) return qrSdkLoads.get(url);
+  const promise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      script.onload = script.onerror = null;
+      if (error) { script.remove(); reject(error); }
+      else resolve();
     };
-    if (typeof window.createNEFingerprint === "function") finish();
-    else {
-      const script = document.createElement("script");
-      script.src = "https://st.music.163.com/device/signature/create/deviceid.js";
-      script.onload = finish;
-      script.onerror = () => resolve("");
-      document.head.appendChild(script);
-      setTimeout(() => resolve(""), 7000);
-    }
+    const timer = setTimeout(() => finish(new Error("验证组件加载超时，请刷新二维码重试")), 7000);
+    script.src = url;
+    script.onload = () => finish(ready() ? null : new Error("验证组件不可用"));
+    script.onerror = () => finish(new Error("验证组件加载失败，请刷新二维码重试"));
+    document.head.appendChild(script);
   });
-  return ydDeviceTokenPromise;
+  qrSdkLoads.set(url, promise);
+  promise.catch(() => qrSdkLoads.delete(url));
+  return promise;
+}
+
+async function getYdDeviceToken() {
+  try {
+    await loadQrSdk("https://st.music.163.com/device/signature/create/deviceid.js",
+      () => typeof window.createNEFingerprint === "function");
+    let timer;
+    try {
+      const result = await Promise.race([
+        window.createNEFingerprint({appId: "9d0ef7e0905d422cba1ecf7e73d77e67", timeout: 6000}).getToken(),
+        new Promise(resolve => { timer = setTimeout(() => resolve(null), 7000); }),
+      ]);
+      return String(result?.token || "");
+    } finally { clearTimeout(timer); }
+  } catch { return ""; }
+}
+
+async function verifyQrCaptcha(flowId) {
+  await loadQrSdk("https://cstaticdun.126.net/load.min.js",
+    () => typeof window.initNECaptcha === "function");
+  if (flowId !== qrFlowId) throw new Error("扫码流程已取消");
+  return new Promise((resolve, reject) => {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    let instance = null;
+    let finished = false;
+    let timer;
+    const finish = (error, value) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (cancelQrVerification === cancel) cancelQrVerification = null;
+      try { instance?.destroy(); } catch { /* SDK teardown must not block cleanup. */ }
+      element.remove();
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const cancel = () => finish(new Error("安全验证已取消，请刷新二维码或改用其他登录方式"));
+    cancelQrVerification = cancel;
+    timer = setTimeout(() => finish(new Error("安全验证初始化超时，请刷新二维码重试")), 10000);
+    try {
+      window.initNECaptcha({
+        captchaId: "73a18dc827b24b18ad0783701a75277d",
+        element, mode: "popup", width: "320px",
+        onVerify: (error, data) => {
+          if (!error && typeof data?.validate === "string" && data.validate) finish(null, data.validate);
+        },
+        onClose: cancel,
+        onError: () => finish(new Error("安全验证不可用，请改用验证码或 Cookie 登录")),
+      }, value => {
+        if (finished || flowId !== qrFlowId) { value.destroy(); return; }
+        instance = value;
+        clearTimeout(timer);
+        instance.popUp();
+      }, () => finish(new Error("安全验证加载失败，请改用验证码或 Cookie 登录")));
+    } catch { finish(new Error("安全验证不可用，请改用验证码或 Cookie 登录")); }
+  });
 }
 
 async function api(url, options = {}) {
@@ -810,6 +870,7 @@ function setWebsiteAuthMode(mode) {
 
 function stopQrPolling() {
   qrFlowId += 1;
+  if (cancelQrVerification) cancelQrVerification();
   if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
   if (qrExpireTimer) { clearTimeout(qrExpireTimer); qrExpireTimer = null; }
 }
@@ -819,16 +880,19 @@ async function startQrFlow({image, status, link, button, onVerified}) {
   const flowId = qrFlowId;
   busy(button, true, "获取中…");
   try {
+    const initialToken = await getYdDeviceToken();
+    if (flowId !== qrFlowId) return;
     const data = await api("/api/auth/qr/start", {
       method: "POST",
-      body: JSON.stringify({browser_user_agent: navigator.userAgent}),
+      body: JSON.stringify({browser_user_agent: navigator.userAgent, yd_device_token: initialToken}),
     });
+    if (flowId !== qrFlowId) return;
     image.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(data.qr_url)}`;
     link.href = data.qr_url;
     status.textContent = "请使用网易云音乐 App 扫描二维码。";
-    const ydDeviceToken = await getYdDeviceToken();
-    if (flowId !== qrFlowId) return;
+    let secureCaptcha;
     let pollInFlight = false;
+    let verificationAttempts = 0;
     qrExpireTimer = setTimeout(() => {
       if (flowId !== qrFlowId) return;
       stopQrPolling();
@@ -839,14 +903,24 @@ async function startQrFlow({image, status, link, button, onVerified}) {
       if (flowId !== qrFlowId || pollInFlight) return;
       pollInFlight = true;
       try {
+        const ydDeviceToken = await getYdDeviceToken();
+        if (flowId !== qrFlowId) return;
         const result = await api("/api/auth/qr/poll", {
           method: "POST",
           body: JSON.stringify({
             yd_device_token: ydDeviceToken,
+            secure_captcha: secureCaptcha,
             browser_user_agent: navigator.userAgent,
           }),
         });
         if (flowId !== qrFlowId) return;
+        if (result.status === "verification_required") {
+          if (++verificationAttempts > 2) throw new Error("网易云仍要求安全验证，请改用验证码或 Cookie 登录");
+          status.textContent = "请完成弹出的安全验证，随后将继续扫码登录。";
+          secureCaptcha = await verifyQrCaptcha(flowId);
+          if (flowId !== qrFlowId) return;
+          status.textContent = "安全验证已完成，正在确认登录。";
+        }
         if (result.status === "scanned") status.textContent = "已扫描，请在网易云音乐 App 中确认登录。";
         if (result.status === "verified") {
           stopQrPolling();
@@ -854,14 +928,17 @@ async function startQrFlow({image, status, link, button, onVerified}) {
           onVerified(result);
         }
       } catch (error) {
+        if (flowId !== qrFlowId) return;
         stopQrPolling();
         status.textContent = error.message;
         notify(error.message, true);
       } finally {
         pollInFlight = false;
       }
-    }, 1200);
+    }, 1000);
   } catch (error) {
+    if (flowId !== qrFlowId) return;
+    stopQrPolling();
     status.textContent = error.message;
     notify(error.message, true);
   }
@@ -1090,11 +1167,11 @@ async function updateAdminUserRole(userId, role, button) {
 }
 
 async function deleteAdminUser(userId, button) {
-  if (!window.confirm("确定要从允许名单移除这个用户吗？")) return;
+  if (!window.confirm("确定删除这个用户吗？其网站账号和网易云绑定也会删除，再次使用需要重新注册。")) return;
   busy(button, true, "删除中…");
   try {
     await api(`/api/admin/users/${encodeURIComponent(userId)}`, {method: "DELETE"});
-    notify("已移出允许名单");
+    notify("已删除用户、网站账号和网易云绑定");
     if (adminEditUser && String(adminEditUser.userId) === String(userId)) closeAdminEditModal();
     await refreshAdminUsers();
   } catch (error) { notify(error.message, true); }
@@ -1377,6 +1454,8 @@ $("#showLegacyRegister").addEventListener("click", (event) => {
 });
 
 $("#startQrRegister").addEventListener("click", async (event) => {
+  registerQrVerified = false;
+  verifiedIdentityConfirmationPurpose = null;
   $("#smsRegisterFields").classList.add("hidden");
   $("#startQrRegister").classList.add("hidden");
   $("#qrRegisterPanel").classList.remove("hidden");
@@ -1451,13 +1530,14 @@ async function submitWebsiteRegistration() {
       payload.captcha = $("#captcha").value;
       payload.country_code = $("#countryCode").value;
     }
-    await api("/api/auth/register", {method: "POST", body: JSON.stringify(payload)});
+    const registration = await api("/api/auth/register", {method: "POST", body: JSON.stringify(payload)});
     $("#registerPassword").value = "";
     $("#phone").value = "";
     $("#captcha").value = "";
     clearCookieInput("#registerCookieFile", "#registerCookieText");
     verifiedIdentityConfirmationPurpose = null;
-    notify("网站账号创建成功");
+    registerQrVerified = false;
+    notify(registration.message || (registration.status === "pending" ? "申请已提交，请等待管理员审批" : "网站账号创建成功"));
     await refreshStatus();
     closeAccountModal();
   } catch (error) {

@@ -303,8 +303,8 @@ def _cookie_import_profile(session: Any, body: dict[str, Any]) -> dict[str, Any]
     return profile
 
 
-def _new_qr_chain_id() -> str:
-    device_id = f"unknown-{secrets.randbelow(1_000_000)}"
+def _new_qr_chain_id(device_id: str = "") -> str:
+    device_id = device_id or f"unknown-{secrets.randbelow(1_000_000)}"
     return f"v1_{device_id}_web_login_{int(time.time() * 1000)}"
 
 
@@ -353,17 +353,20 @@ def start_qr_login() -> Any:
                 return failure
             if identity is None:
                 purpose = "register"
-        key_data = session.client.qr_login_start(
-            user_agent=str(body.get("browser_user_agent") or "")
+        user_agent = str(body.get("browser_user_agent") or "")[:512]
+        device_id = session.client.prepare_qr_device(
+            str(body.get("yd_device_token") or ""), user_agent=user_agent,
         )
+        key_data = session.client.qr_login_start(user_agent=user_agent)
         key = key_data["unikey"]
-        chain_id = _new_qr_chain_id()
+        chain_id = _new_qr_chain_id(device_id)
         session.pending_qr = {
             "key": key,
             "chain_id": chain_id,
             "purpose": purpose,
             "status": "waiting",
             "created_at": int(time.time()),
+            "user_agent": user_agent,
         }
         response = jsonify(
             {
@@ -379,6 +382,21 @@ def start_qr_login() -> Any:
 @app.post("/api/auth/qr/poll")
 def poll_qr_login() -> Any:
     body = json_body()
+    secure_captcha = body.get("secure_captcha")
+    if secure_captcha is not None and (
+        not isinstance(secure_captcha, str) or not secure_captcha.strip()
+        or len(secure_captcha) > 8192
+    ):
+        return error_response("安全验证凭证无效，请重新验证", "invalid_captcha", 400)
+    # Registration is public, but a reauth challenge must still belong to an
+    # authorized member on every poll (access can be revoked after QR start).
+    with auth_sessions.open(auth_token(), touch=False, persist=False) as existing:
+        reauth = bool(existing and existing.pending_qr
+                      and existing.pending_qr.get("purpose") == "reauth")
+    if reauth:
+        _, failure = authorized_identity()
+        if failure is not None:
+            return failure
     with auth_sessions.open(auth_token(), touch=True) as session:
         if session is None or not session.pending_qr:
             return error_response("没有正在进行的扫码登录", "qr_not_started", 400)
@@ -389,9 +407,9 @@ def poll_qr_login() -> Any:
         result = session.client.qr_login_poll(
             str(pending.get("key") or ""),
             str(pending.get("chain_id") or ""),
-            secure_captcha=True,
+            secure_captcha=secure_captcha,
             yd_device_token=str(body.get("yd_device_token") or ""),
-            user_agent=str(body.get("browser_user_agent") or ""),
+            user_agent=str(pending.get("user_agent") or body.get("browser_user_agent") or ""),
         )
         code = result.get("code")
         if code == 801:
@@ -402,10 +420,13 @@ def poll_qr_login() -> Any:
         if code in {800, 810, 811}:
             session.pending_qr = None
             return error_response("二维码已失效，请重新获取", "qr_expired", 400)
-        if code in {8821, 8830}:
+        if code == 8821:
+            pending["status"] = "verification_required"
+            return jsonify({"ok": True, "status": "verification_required", "code": code})
+        if code == 8830:
             session.pending_qr = None
             return error_response(
-                "网易云拒绝了这次扫码验证（设备或登录链路未通过风控），请刷新二维码后重试",
+                "网易云要求进一步安全验证，请改用验证码或 Cookie 登录",
                 "qr_risk_rejected",
                 401,
             )
@@ -427,14 +448,18 @@ def poll_qr_login() -> Any:
             if str(profile.get("userId")) != str(identity.get("netease_user_id")):
                 session.client.session.cookies.clear()
                 session.pending_qr = None
+                session.pending_identity_confirmation = None
                 return error_response(
                     "只能重新验证当前网站账号绑定的网易云账号",
                     "not_allowed",
                     403,
                 )
             netease_bindings.save(profile["userId"], profile, session.client.export_cookies())
+            playlist_cache.invalidate_user(profile["userId"])
             session.client.session.cookies.clear()
             session.pending_qr = None
+            session.pending_identity_confirmation = None
+            session.csrf_token = secrets.token_urlsafe(32)
             return jsonify({"ok": True, "status": "verified", "profile": profile})
         return jsonify({"ok": True, "status": "verified", "profile": profile})
 
@@ -1042,6 +1067,8 @@ def admin_delete_application(user_id: str) -> Any:
     allowlist.remove_application(user_id)
     website_accounts.delete_by_netease_user(user_id)
     netease_bindings.delete(user_id)
+    playlist_cache.invalidate_user(user_id)
+    auth_sessions.delete_by_netease_user(user_id)
     return jsonify({"ok": True, "message": "已拒绝申请并清理账号"})
 
 
@@ -1114,7 +1141,11 @@ def admin_delete_user(user_id: str) -> Any:
         if target_role != "user":
             return error_response("管理员只能删除普通用户", "admin_scope_forbidden", 403)
     allowlist.delete(user_id, actor_id=str(g.current_user["netease_user_id"]))
-    return jsonify({"ok": True, "message": "已从允许名单删除"})
+    website_accounts.delete_by_netease_user(user_id)
+    netease_bindings.delete(user_id)
+    playlist_cache.invalidate_user(user_id)
+    auth_sessions.delete_by_netease_user(user_id)
+    return jsonify({"ok": True, "message": "已删除用户、网站账号和网易云绑定"})
 
 
 @app.errorhandler(NeteaseError)
