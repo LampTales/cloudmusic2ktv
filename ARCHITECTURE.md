@@ -6,7 +6,7 @@
 
 ## 仓库边界
 
-本文只描述 `local` 仓库。仓库内包含前端、后端、渲染器、测试和 `deploy-examples/` 部署示例。
+本文只描述 CloudMusic2KTV 仓库。仓库内包含前端、后端、渲染器、测试和 `deploy-examples/` 部署示例。
 
 歌词读音与字级对齐由独立的 `lyric_align` 仓库作为外部依赖提供；本文只记录双方的集成契约，不把它当作本仓库目录。`deploy-examples/` 目录中的 Compose 文件和环境模板是本仓库提供的示例，实际运行数据由部署者在仓库外的挂载目录管理。
 
@@ -84,9 +84,33 @@
 
 `lyrics.py` 将网易云多语言 LRC 合并为毫秒时间轴；`VideoProject.load()` 过滤不可显示行并加载合法 alignment。`legacy` 仅使用网易云时间轴；`model` 在同一任务中执行 lyric_align 的 reading、可选 Demucs 和 CTC，再渲染视频。纯伴奏、发音标注和平滑 sweep 要求 model。渲染器不得重新推断字级时间。
 
+输入歌词只有带时间戳的原文 LRC 行会进入时间轴；空文本在加载时被丢弃，`music`、`interlude`、`instrumental` 等完整标记行在渲染器过滤。模型产物还会把 lyric-align 判定为 `non_sung` 的元数据行过滤；CTC 失败的 `fallback` 行和没有读音的 `unresolved` 行仍保留显示，只使用它们已有的行级或插值时间。合法 alignment 中若所有行都被判定为 `non_sung`，模型时间轴保持为空，不会重新退回旧时间轴。
+
+模型 `smooth` 扫色只在渲染器的临时副本上处理最终 `display_units`：相邻非空白字符之间的正间隔不超过 200ms 时在中点连接；空白字符和更长的间隔保持原样。该阈值是渲染器环境变量 `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS`，不修改 `alignment.json`。
+
 `VideoOptions` 覆盖歌词语言、扫色、背景、强调色、音频、分辨率、画质、开场、间奏和频谱。`FrameRenderer` 同时用于预览和正式视频；FFmpeg 输出 H.264/AAC。视频先写 `.part.mp4` 后原子替换，artifact 文件名通过固定正则且必须位于歌曲目录内。
 
 正片复用静态底图，频谱仅在柱形覆盖的局部区域做 alpha 合成。字体、字号适配和文字测量使用渲染器实例内的有界缓存；扫色仍按整句排版、按既有时间裁剪，仅缓存最多四张包含描边的局部高亮图层。缓存不落盘、不跨任务共享，也不保存播放进度，预览可直接跳到任意时间；恢复任务时由新渲染器重建。`tests/test_render_equivalence.py` 对照整帧合成路径验证两种对齐模式、两种分辨率、开头过渡和缓存重建的像素一致性。
+
+### 模型参数与依赖
+
+`requirements-model.txt` 通过完整提交 SHA 固定公开的 `lyric_align` 源码归档，镜像构建不依赖 Git；更新时应核实提交已推送到远端。默认导入已安装的包，不自动查找相邻仓库。开发时可使用 editable 安装，或显式设置 `LYRIC_ALIGN_PATH` 为源码的 `src/` 目录覆盖导入路径。
+
+模型权重通过 `LYRIC_*_MODEL_PATH` 指向只读挂载的 Hugging Face snapshot；迁移缓存时必须包含 `blobs/`，不能只复制 snapshot 中的符号链接。容器启用离线模式，模型缺失时不会自动下载。当前使用 NextFire CTC 模型，Sudachi 生成日语 reading 后由库转为拉丁字母目标，英语保留拼写。具体预处理、局部修复和回退策略见独立 `lyric_align` 仓库的 `LIBRARY.md` 和 `PIPELINE.md`。
+
+| 环境变量 | 默认值 | 集成含义 |
+| --- | --- | --- |
+| `LYRIC_CTC_SCORE_THRESHOLD` | `-2.25` | 当前模型的 CTC 平均分质量门 |
+| `LYRIC_CTC_COVERAGE_THRESHOLD` | `0.8` | CTC 词表覆盖率门限 |
+| `LYRIC_CTC_MARGIN_MS` | `500` | 句级搜索窗口扩展量 |
+| `LYRIC_CTC_ACTIVITY_MARGIN_MS` | `120` | 人声边界搜索余量 |
+| `LYRIC_CTC_ACTIVITY_CONFIDENCE_THRESHOLD` | `0.45` | CTC 搜索的人声活动门限 |
+| `LYRIC_ACTIVITY_PROJECTION_CONFIDENCE_THRESHOLD` | `0.35` | 回退时间投影的人声活动门限 |
+| `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS` | `200` | 渲染器平滑扫色可连接的最大字符间隔 |
+
+回退投影使用较低的 activity 门限，以便 CTC 失败时仍尽可能利用人声边界指导扫色。`LYRIC_ACTIVITY_CONFIDENCE_THRESHOLD` 仅作为 CTC 门限的兼容别名：新变量非空时优先，否则读取旧变量，最后使用 `0.45`；它不控制回退投影门限。模板同时保留这种优先级。
+
+CTC 缓存签名包含模型路径、质量门限和库的流水线版本；换用新 snapshot 后，重新提交模型生成任务会重算失效的对齐。旧模型权重目录不会被自动选择，已有 MP4 也不会自动重渲染。升级现有部署需同步检查 `.env` 中的模型路径及显式设置过的门限，因为它们会覆盖新模板默认值。
 
 ## 任务队列与恢复
 

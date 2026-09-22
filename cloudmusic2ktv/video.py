@@ -1166,13 +1166,14 @@ def _prepare_model_alignment(project: VideoProject, options: VideoOptions, progr
     """Run lyric-align in-process, keeping its model cache alive for the queue."""
     import sys
     configured_root = os.environ.get("LYRIC_ALIGN_PATH", "").strip()
-    source_root = Path(configured_root).expanduser() if configured_root else Path(__file__).resolve().parents[2] / "lyric_align" / "src"
-    if str(source_root) not in sys.path:
-        sys.path.insert(0, str(source_root))
+    if configured_root:
+        source_root = str(Path(configured_root).expanduser())
+        if source_root not in sys.path:
+            sys.path.insert(0, source_root)
     try:
         from lyric_align import AlignmentConfig, ModelPaths, prepare_song
     except ImportError as exc:
-        raise VideoError("模型预处理依赖 lyric-align 未安装，请先安装 lyric_align[all]") from exc
+        raise VideoError("模型预处理依赖 lyric-align 未安装，请先安装 requirements-model.txt 中的依赖") from exc
     ffmpeg = get_ffmpeg_executable()
     demucs_path = os.environ.get("LYRIC_DEMUCS_MODEL_PATH", "").strip() or None
     ctc_path = os.environ.get("LYRIC_CTC_MODEL_PATH", "").strip() or None
@@ -1194,11 +1195,15 @@ def _prepare_model_alignment(project: VideoProject, options: VideoOptions, progr
         offset_boundary_tolerance_ms=int(os.environ.get("LYRIC_OFFSET_BOUNDARY_TOLERANCE_MS", "800")),
         offset_acoustic_verify=_to_bool(os.environ.get("LYRIC_OFFSET_ACOUSTIC_VERIFY"), False),
         offset_acoustic_min_margin=float(os.environ.get("LYRIC_OFFSET_ACOUSTIC_MIN_MARGIN", "0.15")),
-        ctc_score_threshold=float(os.environ.get("LYRIC_CTC_SCORE_THRESHOLD", "-1.5")),
+        ctc_score_threshold=float(os.environ.get("LYRIC_CTC_SCORE_THRESHOLD", "-2.25")),
         ctc_coverage_threshold=float(os.environ.get("LYRIC_CTC_COVERAGE_THRESHOLD", "0.8")),
         ctc_margin_ms=int(os.environ.get("LYRIC_CTC_MARGIN_MS", "500")),
         ctc_activity_margin_ms=int(os.environ.get("LYRIC_CTC_ACTIVITY_MARGIN_MS", "120")),
-        activity_confidence_threshold=float(os.environ.get("LYRIC_ACTIVITY_CONFIDENCE_THRESHOLD", "0.45")),
+        activity_confidence_threshold=float(
+            os.environ.get("LYRIC_CTC_ACTIVITY_CONFIDENCE_THRESHOLD", "").strip()
+            or os.environ.get("LYRIC_ACTIVITY_CONFIDENCE_THRESHOLD", "0.45")
+        ),
+        activity_projection_confidence_threshold=float(os.environ.get("LYRIC_ACTIVITY_PROJECTION_CONFIDENCE_THRESHOLD", "0.35")),
     )
     prepare_song(project.directory, config=config, stages=("reading", "demucs", "ctc"), progress=progress)
 

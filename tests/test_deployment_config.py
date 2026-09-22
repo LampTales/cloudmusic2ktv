@@ -2,7 +2,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LYRIC_ALIGN_REVISION = "79b24faa3d2897ad24813e0bfb7436b52dc21b36"
+LYRIC_ALIGN_REVISION = "53f65b5e4ef5518c82b956b28d246f3f8d6a07bb"
+NEXTFIRE_REVISION = "2ab2b5f46539ee284703c281f286b01d2410ee12"
 
 
 def read(relative_path: str) -> str:
@@ -25,6 +26,11 @@ def test_backend_image_uses_pinned_public_lyric_align_package():
     assert "pkg-config" in dockerfile
     assert "libopus-dev" in dockerfile
     assert "COPY --from=wheel-builder /wheels /wheels" in dockerfile
+    for relative_path in ("docker-compose.yml", "deploy-examples/compose.backend.yml", ".env.example", "deploy-examples/backend.env.example"):
+        compose = read(relative_path)
+        assert "models--NextFire--mms-300m-ForcedAligner-karaoke-ja-Latn" in compose
+        assert NEXTFIRE_REVISION in compose
+        assert "wav2vec2-large-xlsr-53-japanese" not in compose
 
     builder, runtime = dockerfile.split("FROM python:3.11-slim-bookworm", maxsplit=2)[1:]
     assert "pkg-config" in builder
