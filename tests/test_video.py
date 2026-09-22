@@ -20,7 +20,15 @@ import cloudmusic2ktv.video as video_module
 
 
 @pytest.mark.parametrize('enabled', [False, True])
-def test_model_alignment_passes_offset_policy_to_library(tmp_path, monkeypatch, enabled):
+@pytest.mark.parametrize('activity_env,ctc_threshold,projection_threshold', [
+    ({}, 0.45, 0.35),
+    ({'ACTIVITY_CONFIDENCE_THRESHOLD': '0.6'}, 0.6, 0.35),
+    ({'CTC_ACTIVITY_CONFIDENCE_THRESHOLD': '0.7', 'ACTIVITY_CONFIDENCE_THRESHOLD': '0.6'}, 0.7, 0.35),
+    ({'CTC_ACTIVITY_CONFIDENCE_THRESHOLD': '', 'ACTIVITY_CONFIDENCE_THRESHOLD': '0.6'}, 0.6, 0.35),
+    ({'ACTIVITY_PROJECTION_CONFIDENCE_THRESHOLD': '0.2'}, 0.45, 0.2),
+])
+def test_model_alignment_passes_offset_policy_to_library(tmp_path, monkeypatch, enabled,
+                                                        activity_env, ctc_threshold, projection_threshold):
     import sys
     from types import SimpleNamespace
     seen = []
@@ -33,8 +41,16 @@ def test_model_alignment_passes_offset_policy_to_library(tmp_path, monkeypatch, 
     monkeypatch.setattr(video_module, 'get_ffmpeg_executable', lambda: 'ffmpeg')
     monkeypatch.setenv('LYRIC_DEMUCS_MODEL_PATH', '/models/demucs')
     monkeypatch.setenv('LYRIC_CTC_MODEL_PATH', '/models/ctc')
+    monkeypatch.delenv('LYRIC_ALIGN_PATH', raising=False)
+    import_paths = list(sys.path)
     for key in ('BOUNDARY_CHECK', 'SILENCE_MS', 'SUSTAIN_MS', 'BOUNDARY_TOLERANCE_MS', 'ACOUSTIC_VERIFY', 'ACOUSTIC_MIN_MARGIN'):
         monkeypatch.delenv('LYRIC_OFFSET_' + key, raising=False)
+    for key in ('CTC_SCORE_THRESHOLD', 'CTC_COVERAGE_THRESHOLD', 'CTC_MARGIN_MS', 'CTC_ACTIVITY_MARGIN_MS',
+                'CTC_ACTIVITY_CONFIDENCE_THRESHOLD', 'ACTIVITY_CONFIDENCE_THRESHOLD',
+                'ACTIVITY_PROJECTION_CONFIDENCE_THRESHOLD'):
+        monkeypatch.delenv('LYRIC_' + key, raising=False)
+    for key, value in activity_env.items():
+        monkeypatch.setenv('LYRIC_' + key, value)
     if enabled:
         monkeypatch.setenv('LYRIC_OFFSET_ACOUSTIC_VERIFY', 'true')
         monkeypatch.setenv('LYRIC_OFFSET_BOUNDARY_CHECK', 'false')
@@ -45,7 +61,14 @@ def test_model_alignment_passes_offset_policy_to_library(tmp_path, monkeypatch, 
     assert config.offset_boundary_check is not enabled
     assert config.offset_silence_ms == (2500 if enabled else 2000)
     assert config.offset_boundary_tolerance_ms == 800
+    assert config.ctc_score_threshold == -2.25
+    assert config.ctc_coverage_threshold == 0.8
+    assert config.ctc_margin_ms == 500
+    assert config.ctc_activity_margin_ms == 120
+    assert config.activity_confidence_threshold == ctc_threshold
+    assert config.activity_projection_confidence_threshold == projection_threshold
     assert seen[0]['stages'] == ('reading', 'demucs', 'ctc')
+    assert sys.path == import_paths  # Installed dependency must not be shadowed by adjacent source trees.
 
 
 def make_project(tmp_path: Path, first_start: int = 1000) -> VideoProject:

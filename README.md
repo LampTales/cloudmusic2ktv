@@ -43,12 +43,12 @@ cloudmusic2ktv-backend/
         └── huggingface/
             └── hub/
                 ├── models--adefossez--HTDemucs/
-                └── models--jonatasgrosman--wav2vec2-large-xlsr-53-japanese/
+                └── models--NextFire--mms-300m-ForcedAligner-karaoke-ja-Latn/
 ```
 
 也可以把 `models/` 放到独立的大容量磁盘，例如 `/srv/cloudmusic2ktv-models`；不要把模型路径写死为某个系统目录。
 
-模型缓存必须包含 Hugging Face 的 `blobs`、`refs` 和 `snapshots`，不能只复制 snapshot 中的符号链接。可在后端主机联网准备缓存，容器运行时保持离线：
+在后端主机联网下载以下固定版本，服务运行时离线加载。迁移到其他磁盘时请复制完整的 `huggingface/` 目录，避免模型文件链接失效：
 
 ```bash
 mkdir -p docker-data/models
@@ -57,14 +57,14 @@ python3 -m venv /tmp/cloudmusic2ktv-hf
 export HF_HOME="$PWD/docker-data/models/huggingface"
 /tmp/cloudmusic2ktv-hf/bin/hf download adefossez/HTDemucs \
   --revision cbc8a9b1a87023b7fd74e7b3412e6321c0eab003
-/tmp/cloudmusic2ktv-hf/bin/hf download jonatasgrosman/wav2vec2-large-xlsr-53-japanese \
-  --revision cf031e020336460d15a417eba710bbc5bb43be9a
+/tmp/cloudmusic2ktv-hf/bin/hf download NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn \
+  --revision 2ab2b5f46539ee284703c281f286b01d2410ee12
 ```
 
 模型来源和版本：
 
 - [HTDemucs](https://huggingface.co/adefossez/HTDemucs)，revision `cbc8a9b1a87023b7fd74e7b3412e6321c0eab003`；
-- [wav2vec2-large-xlsr-53-japanese](https://huggingface.co/jonatasgrosman/wav2vec2-large-xlsr-53-japanese)，revision `cf031e020336460d15a417eba710bbc5bb43be9a`。
+- [NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn](https://huggingface.co/NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn)，revision `2ab2b5f46539ee284703c281f286b01d2410ee12`。
 
 请同时遵守模型各自的许可证。下载完成后，确保容器用户可读：
 
@@ -82,13 +82,16 @@ LYRIC_MODELS_DIR=./docker-data/models
 LYRIC_DEVICE=cpu
 ```
 
-容器内部固定监听 `0.0.0.0:7860`，`CLOUDMUSIC2KTV_BACKEND_PORT` 是宿主机发布端口。确保 UID 10001 可写入 `docker-data`，然后启动：
+容器内部固定监听 `0.0.0.0:7860`，`CLOUDMUSIC2KTV_BACKEND_PORT` 是宿主机发布端口。给容器用户分配数据目录的写入权限，然后启动（以下权限命令适用于 Linux 后端主机）：
 
 ```bash
+sudo chown -R 10001:10001 docker-data/instance docker-data/outputs
 docker compose pull
 docker compose up -d
-curl http://127.0.0.1:7860/api/healthz
+curl -fsS 'http://<后端私有IP>:7860/api/healthz'
 ```
+
+将检查命令中的地址和端口替换为 `.env` 中的值；正常返回 `{"ok":true,"status":"healthy"}`。
 
 ### 前端主机
 
@@ -112,7 +115,7 @@ docker compose pull
 docker compose up -d
 ```
 
-让公网 Nginx、Caddy 或同类代理把域名（以及可选的 `/ktv` 前缀）转发到前端 `127.0.0.1:8080`。如果使用路径前缀，后端的 `CLOUDMUSIC2KTV_BASE_PATH`、外部 URL 和前端入口必须保持一致；代理转发到后端时要剥离该前缀。
+让公网 Nginx、Caddy 或同类代理把域名转发到前端 `127.0.0.1:8080`。如果使用 `/ktv/` 路径前缀，设置后端 `CLOUDMUSIC2KTV_BASE_PATH=/ktv`，并让公网代理在转发到前端容器时剥离 `/ktv`：例如外部 `/ktv/api/healthz` 应转发为 `/api/healthz`。入口 `/ktv` 应重定向到带尾部斜杠的 `/ktv/`。
 
 ## 首次使用
 
@@ -121,13 +124,9 @@ docker compose up -d
 3. 搜索歌曲或浏览歌单，先下载全部素材，再在视频面板选择歌词、背景、扫色、分辨率和音频等选项。
 4. 提交生成任务，在队列中查看进度。生成完成后可预览、播放、下载或生成短期投屏链接。
 
-角色有 `root`、`admin`、`user` 三种。`root` 可管理其他成员，不能被删除；`admin` 只能管理普通用户。删除用户会撤销访问，并清理其网站账号、网易云绑定（含 Cookie）、歌单缓存和关联会话，与拒绝注册申请一致；再次使用需要重新注册。共享素材和视频保留。允许名单位于后端 `instance/allowlist.json`。
+传统模式使用歌曲自带的歌词时间轴；模型模式自动处理字级对齐，支持纯伴奏、假名/罗马字标注和平滑扫色。使用模型模式前须完成上面的模型下载和挂载。
 
-## 视频选项和模型功能
-
-传统 `legacy` 模式只使用网易云歌词时间轴；`model` 模式会调用 `lyric_align` 进行读音、可选人声分离和 CTC 字级对齐。纯伴奏、假名/罗马字标注和平滑扫色都要求模型模式。模型阶段在视频任务中自动执行，权重从宿主机只读挂载，当前验证配置使用 CPU 和 Sudachi。
-
-模型默认 revision 和缓存准备方法见独立 [`lyric_align`](https://github.com/LampTales/lyric_align) 仓库中的 `README.md`、`LIBRARY.md` 与 `PIPELINE.md`。模型目录不应提交到 Git，也不会写入镜像。
+角色有 `root`、`admin`、`user` 三种。`root` 可管理其他成员，不能被删除；`admin` 只能管理普通用户。删除成员会撤销访问并清除其账号和网易云绑定，再次使用需要重新注册；共享素材和视频保留。
 
 ## 配置参考
 
@@ -146,7 +145,7 @@ docker compose up -d
 | `LYRIC_DEMUCS_MODEL_PATH` / `LYRIC_CTC_MODEL_PATH` | 容器内模型 snapshot 路径 |
 | `LYRIC_DEVICE` | 推理设备，当前使用 `cpu` |
 
-完整默认值和同机 Compose 示例见 `.env.example`、`deploy-examples/backend.env.example` 和 `deploy-examples/frontend.env.example`。源码运行还支持 `CLOUDMUSIC2KTV_HOST`、`CLOUDMUSIC2KTV_PORT`、`CLOUDMUSIC2KTV_FFMPEG`、`CLOUDMUSIC2KTV_FONT_DIR`、`CLOUDMUSIC2KTV_CORS_ORIGINS` 等变量。
+完整默认值见 `.env.example`、`deploy-examples/backend.env.example` 和 `deploy-examples/frontend.env.example`。对齐和平滑扫色参数建议先保留默认值；含义和兼容规则见 [ARCHITECTURE.md](ARCHITECTURE.md#模型参数与依赖)。
 
 同机 Docker 构建和源码运行只用于开发调试，包含依赖安装、本地端口和测试命令，见 [ARCHITECTURE.md](ARCHITECTURE.md) 的“本地调试与验证”。
 
@@ -166,15 +165,6 @@ outputs/                       音频、歌词、封面、模型产物和视频
 
 不要把这些文件提交到仓库或暴露给前端。生产环境只公开 HTTPS 前端，后端端口限制为前端节点可访问；Gunicorn 必须保持单 worker。JSON 存储适合可信、低流量、单实例部署，不支持多节点共享队列。
 
-## 进一步阅读与验证
+## 开发文档
 
-开发者和 agents 请阅读 [ARCHITECTURE.md](ARCHITECTURE.md)。常用验证：
-
-```bash
-cd <local-repo>
-PYTHONPATH=. python -m pytest tests
-node --check frontend/static/app.js
-docker compose config
-```
-
-涉及视频时还应检查预览、MP4 的 HEAD、HTTP Range、拖动播放、下载文件名和投屏链接有效期。
+代码结构、模型集成契约和测试命令见 [ARCHITECTURE.md](ARCHITECTURE.md)。
