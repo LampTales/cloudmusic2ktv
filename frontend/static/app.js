@@ -479,13 +479,13 @@ function updateCastDirectLink() {
     updateBrowserCastHelp();
     return;
   }
-  const url = resolveBackendUrl(video.url);
-  link.href = url;
-  if (media.src !== url) {
-    media.src = url;
-    media.preload = "metadata";
-    media.load();
-  }
+  const url = new URL(resolveBackendUrl(video.url), window.location.href);
+  // The access marker is added to the action link, not to the probe element.
+  // Selecting a song must not count as playing it or cause a media request.
+  url.searchParams.set("access", "1");
+  link.href = url.href;
+  media.removeAttribute("src");
+  media.load();
   browserButton.disabled = false;
   // Obtain the device-safe URL before the user's click. Calling prompt() only
   // after an awaited request can consume the transient user activation that
@@ -512,12 +512,6 @@ async function prefetchCastUrl(video) {
     const value = await pending;
     castUrlPending.delete(key);
     castUrlCache.set(key, value);
-    const media = $("#castMediaElement");
-    if (media.src !== value) {
-      media.src = value;
-      media.preload = "metadata";
-      media.load();
-    }
     return value;
   } catch {
     return null;
@@ -685,6 +679,7 @@ function downloadCastVideo() {
   // URL parsing also works when the frontend is mounted below a path prefix.
   const url = new URL(resolveBackendUrl(video.url), window.location.href);
   url.searchParams.set("download", "1");
+  url.searchParams.set("access", "1");
   const link = document.createElement("a");
   link.href = url.href;
   link.download = video.download_name || video.filename;

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
@@ -6,6 +8,7 @@ import app as web_app
 from cloudmusic2ktv.access import AllowlistStore
 from cloudmusic2ktv.netease import NeteaseClient
 from cloudmusic2ktv.sessions import FileSessionStore
+from cloudmusic2ktv.song_access import SongAccessStore
 from tests.helpers import set_session_cookie
 
 
@@ -217,6 +220,28 @@ def test_video_artifact_supports_head_and_byte_ranges_without_source_materials(m
     assert ranged.status_code == 206
     assert ranged.data == b"2345"
     assert ranged.headers["Accept-Ranges"] == "bytes"
+
+
+def test_video_artifact_access_marker_touches_once_within_interval(monkeypatch, tmp_path):
+    monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    monkeypatch.setattr(
+        web_app,
+        "song_access",
+        SongAccessStore(tmp_path),
+    )
+    client = member_client(monkeypatch, tmp_path)
+    directory = tmp_path / "123_artist_song"
+    directory.mkdir()
+    video = directory / "ktv_720p.mp4"
+    video.write_bytes(b"generated-video")
+
+    first = client.get(f"/api/video/artifact/123/{video.name}?access=1")
+    second = client.get(f"/api/video/artifact/123/{video.name}?access=1")
+
+    assert first.status_code == second.status_code == 200
+    record = json.loads((directory / "last_access.json").read_text(encoding="utf-8"))
+    assert record["last_reason"] == "video_play"
+    assert record["last_access_at"] > 0
 
 
 def test_video_artifact_can_be_downloaded_as_an_attachment(monkeypatch, tmp_path):

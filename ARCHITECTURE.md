@@ -124,6 +124,8 @@ CTC 缓存签名包含模型路径、质量门限和库的流水线版本；换�
 
 artifact 接口支持 HEAD、HTTP Range、下载文件名和流式响应；代理必须保留 `Range`、`Content-Range`、`Content-Length`、`Content-Disposition`。普通 URL 需要网站 Cookie，投屏 URL 使用后端 HMAC 密钥和过期时间，设备无需网站会话。签名密钥位于 `instance/media_signing.key` 或环境变量，不能进入前端。
 
+歌曲目录的最后访问时间保存在各目录自己的 `last_access.json` 中，不使用统筹所有歌曲的索引文件。下载素材完成、加入视频队列、生成投屏链接，以及带访问标记的播放/下载请求都会登记访问；播放器的 Range 请求只会在 `CLOUDMUSIC2KTV_SONG_ACCESS_TOUCH_INTERVAL_SECONDS` 间隔后再次登记，避免播放过程中持续写 JSON。目录数超过 `CLOUDMUSIC2KTV_SONG_DIRECTORY_LIMIT` 时，在下一次素材下载完成后逐目录读取访问时间，按访问时间清理最多 `CLOUDMUSIC2KTV_SONG_DIRECTORY_DELETE_COUNT` 个目录。旧目录没有记录时使用目录 mtime，清理每个候选前会重新检查时间；活跃下载、视频任务和刚完成下载的目录受保护。
+
 `frontend/static/app.js` 从运行时 `config.js` 读取 API origin/base path，留空时使用同源 `/api`。`frontend_server.py` 仅用于开发，生产使用 Nginx 镜像。
 
 ## Docker、CI 与并发约束
