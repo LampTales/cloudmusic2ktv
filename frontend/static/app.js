@@ -2068,7 +2068,7 @@ function showQueue(queue) {
   $("#queueCurrent").classList.toggle("hidden", !current);
   if (current) {
     const song = current.song || {};
-    $("#queueCover").src = secureNeteaseMediaUrl(song.cover_url);
+    setNeteaseThumbnail($("#queueCover"), song.cover_url, 48, 96);
     $("#queueCover").classList.toggle("hidden", !song.cover_url);
     $("#queueSong").textContent = `${song.name || `歌曲 ${current.song_id}`} — ${song.artist || "未知歌手"}`;
     $("#queueMessage").textContent = `${current.resolution} · ${current.message || "等待渲染"}`;
@@ -2138,7 +2138,10 @@ function renderQueueDetails() {
       row.addEventListener("click", () => selectCompletedTask(job));
     }
     if (job.song?.cover_url) {
-      const image = document.createElement("img"); image.src = secureNeteaseMediaUrl(job.song.cover_url); image.alt = "";
+      const image = document.createElement("img");
+      setNeteaseThumbnail(image, job.song.cover_url, 48, 96);
+      image.loading = "lazy";
+      image.alt = "";
       row.append(image);
     }
     const copy = document.createElement("div");

@@ -155,8 +155,8 @@ def test_all_netease_profile_and_song_images_are_upgraded_to_https():
     assert '$("#cover").src = secureNeteaseMediaUrl(song.cover_url)' in script
     assert "image.src = secureNeteaseMediaUrl(user.avatarUrl)" in script
     assert "avatar.src = secureNeteaseMediaUrl(user.avatarUrl)" in script
-    assert '$("#queueCover").src = secureNeteaseMediaUrl(song.cover_url)' in script
-    assert "image.src = secureNeteaseMediaUrl(job.song.cover_url)" in script
+    assert 'setNeteaseThumbnail($("#queueCover"), song.cover_url, 48, 96)' in script
+    assert "setNeteaseThumbnail(image, job.song.cover_url, 48, 96)" in script
 
 
 def test_login_uses_password_manager_form_semantics():
