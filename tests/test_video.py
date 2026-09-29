@@ -272,6 +272,126 @@ def test_active_lyric_is_whole_line_or_uniform_sweep(tmp_path):
     assert sweep_progress == [0.5]
 
 
+def test_model_sweep_keeps_previous_line_until_next_display_unit_starts(tmp_path):
+    project = make_project(tmp_path / "project")
+    lines = [
+        {
+            "source_index": 0,
+            "text": "第一句",
+            "start_ms": 1000,
+            "end_ms": 3000,
+            "display_units": [
+                {"text": "第", "start_ms": 1100, "end_ms": 1500},
+                {"text": "一", "start_ms": 1500, "end_ms": 1900},
+                {"text": "句", "start_ms": 1900, "end_ms": 2200},
+            ],
+        },
+        {
+            "source_index": 1,
+            "text": "第二句",
+            "start_ms": 3000,
+            "end_ms": 5000,
+            "display_units": [
+                {"text": "第", "start_ms": 3400, "end_ms": 3800},
+                {"text": "二", "start_ms": 3800, "end_ms": 4200},
+                {"text": "句", "start_ms": 4200, "end_ms": 4500},
+            ],
+        },
+    ]
+    project = VideoProject(**{**project.__dict__, "alignment": {"lines": lines}})
+    renderer = FrameRenderer(
+        project,
+        VideoOptions(alignment_mode="model", lyric_highlight_mode="smooth", spectrum=False),
+    )
+
+    assert renderer._line_activation_start(0) == 1100
+    assert renderer._line_activation_start(1) == 3400
+    assert renderer._lyric_state(3300)["index"] == 0
+    assert renderer._lyric_state(3400)["index"] == 1
+
+
+def test_model_sweep_caps_continuous_line_extension_at_800ms(tmp_path):
+    project = make_project(tmp_path / "project")
+    lines = [
+        {
+            "source_index": 0,
+            "text": "第一句",
+            "start_ms": 1000,
+            "end_ms": 1500,
+            "display_units": [{"text": "第", "start_ms": 1100, "end_ms": 1400}],
+        },
+        {
+            "source_index": 1,
+            "text": "第二句",
+            "start_ms": 3000,
+            "end_ms": 7000,
+            "display_units": [{"text": "第", "start_ms": 5000, "end_ms": 5400}],
+        },
+    ]
+    project = VideoProject(**{**project.__dict__, "alignment": {"lines": lines}})
+    renderer = FrameRenderer(
+        project,
+        VideoOptions(alignment_mode="model", lyric_highlight_mode="smooth", spectrum=False),
+    )
+
+    assert renderer._line_activation_start(1) == 3800
+    assert renderer._lyric_state(3799)["index"] == 0
+    assert renderer._lyric_state(3800)["index"] == 1
+
+
+def test_model_sweep_keeps_initial_line_visible_before_actual_onset(tmp_path):
+    project = make_project(tmp_path / "project")
+    line = {
+        "source_index": 0,
+        "text": "第一句",
+        "start_ms": 1000,
+        "end_ms": 3000,
+        "display_units": [
+            {"text": "第", "start_ms": 1500, "end_ms": 1800},
+            {"text": "一", "start_ms": 1800, "end_ms": 2200},
+        ],
+    }
+    project = VideoProject(**{**project.__dict__, "alignment": {"lines": [line]}})
+    renderer = FrameRenderer(
+        project,
+        VideoOptions(alignment_mode="model", lyric_highlight_mode="smooth", spectrum=False),
+    )
+
+    state = renderer._lyric_state(1300)
+    assert state["kind"] == "active"
+    assert state["index"] == 0
+
+
+def test_model_sweep_keeps_interlude_cue_on_source_marker(tmp_path):
+    project = make_project(tmp_path / "project")
+    lines = [
+        {
+            "source_index": 0,
+            "text": "第一句",
+            "start_ms": 1000,
+            "end_ms": 21000,
+            "singing_end_ms": 8000,
+            "display_units": [{"text": "第", "start_ms": 1000, "end_ms": 1500}],
+        },
+        {
+            "source_index": 1,
+            "text": "第二句",
+            "start_ms": 21000,
+            "end_ms": 25000,
+            "display_units": [{"text": "第", "start_ms": 23000, "end_ms": 23500}],
+        },
+    ]
+    project = VideoProject(**{**project.__dict__, "alignment": {"lines": lines}})
+    renderer = FrameRenderer(
+        project,
+        VideoOptions(alignment_mode="model", lyric_highlight_mode="smooth", spectrum=False),
+    )
+
+    state = renderer._lyric_state(18000)
+    assert state == {"kind": "cue", "index": 1, "remaining": 3000}
+    assert renderer._lyric_state(21800)["index"] == 1
+
+
 def test_model_sweep_bridges_only_short_visible_character_gaps(monkeypatch, tmp_path):
     project = make_project(tmp_path / "project")
     units = [

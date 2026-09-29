@@ -40,6 +40,9 @@ SPECTRUM_CACHE_VERSION = 2
 # policy in the renderer (the alignment artifact remains unchanged); operators
 # can tune it without exposing another front-end control.
 MODEL_SWEEP_GAP_THRESHOLD_MS = 200
+# A delayed onset may keep the preceding line visible inside a continuous
+# paragraph, but it must not extend that line indefinitely into the next one.
+MODEL_SWEEP_MAX_LEAD_IN_MS = 800
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 LYRIC_MARKER = re.compile(
     r"^[~*_\-\[\]{}()<>「」『』【】〔〕·•.,!?！？:：]*(?:间奏|間奏|instrumental|interlude|music)"
@@ -610,21 +613,79 @@ class FrameRenderer:
 
     def _lyric_state(self, song_time_ms: int) -> dict[str, Any]:
         starts = [int(line["start_ms"]) for line in self.timeline]
+        # In model sweep modes a line can have a short lead-in between its
+        # source lyric marker and the first character that is actually
+        # highlighted.  Keep the preceding pair on screen during that
+        # lead-in; switching at the source marker makes the previous line
+        # disappear before the next line has any active colour.
+        activation_starts: list[int] = []
+        for index in range(len(self.timeline)):
+            marker = starts[index]
+            # Paragraph starts and post-interlude lines remain marker-based.
+            # Only a continuous pair gets the delayed-onset transition.
+            if index == 0 or self._is_interlude_after(index - 1):
+                activation = marker
+            else:
+                activation = self._line_activation_start(index)
+                # Keep search order valid when adjacent source markers are
+                # closer than a capped lead-in.
+                activation = max(activation, activation_starts[-1])
+            activation_starts.append(activation)
+        # The first line has no preceding pair to preserve.  Keep its
+        # original marker-based entrance and let the per-character renderer
+        # show it inactive until its first unit starts.
         if song_time_ms < starts[0]:
             if self.options.interlude_cue and starts[0] - song_time_ms <= INTERLUDE_COUNTDOWN_MS:
                 return {"kind": "cue", "index": 0, "remaining": starts[0] - song_time_ms}
             return {"kind": "blank"}
-        index = int(np.searchsorted(starts, song_time_ms, side="right") - 1)
+        if song_time_ms < activation_starts[0]:
+            return {"kind": "active", "index": 0, "progress": _ratio(song_time_ms, starts[0], self._line_end_ms(0))}
+        index = int(np.searchsorted(activation_starts, song_time_ms, side="right") - 1)
         start = starts[index]
         end = self._line_end_ms(index)
         if index + 1 < len(starts) and self._is_interlude_after(index):
             if song_time_ms <= end:
                 return {"kind": "active", "index": index, "progress": _ratio(song_time_ms, start, end)}
+            # Interlude boundaries remain marker-based.  Delayed character
+            # onsets only affect transitions inside a continuous paragraph.
             next_start = starts[index + 1]
             if self.options.interlude_cue and song_time_ms >= next_start - INTERLUDE_COUNTDOWN_MS:
                 return {"kind": "cue", "index": index + 1, "remaining": next_start - song_time_ms}
             return {"kind": "blank"}
         return {"kind": "active", "index": index, "progress": _ratio(song_time_ms, start, end)}
+
+    def _line_activation_start(self, index: int) -> int:
+        """Return when a model sweep can first visibly start for a line.
+
+        Alignment ``start_ms`` is the source lyric marker, while
+        ``display_units`` (or the diagnostic token fallbacks) contains the
+        renderer-facing onset.  Only model sweep modes use the latter.  A
+        missing/empty timing list falls back to the marker so legacy and
+        sentence-level rendering retain their existing timing semantics.
+        """
+        line = self.timeline[index]
+        marker = int(line.get("start_ms", 0))
+        if not (
+            self.options.alignment_mode == "model"
+            and self.options.lyric_highlight_mode in {"sweep", "smooth"}
+        ):
+            return marker
+        spans = line.get("display_units") or line.get("tokens") or line.get("mora") or []
+        if not isinstance(spans, list):
+            return marker
+        all_starts: list[int] = []
+        for item in spans:
+            if not isinstance(item, dict):
+                continue
+            try:
+                value = max(marker, int(item.get("start_ms", marker)))
+            except (TypeError, ValueError):
+                continue
+            all_starts.append(value)
+        if all_starts:
+            onset = min(all_starts)
+            return marker + min(max(0, onset - marker), MODEL_SWEEP_MAX_LEAD_IN_MS)
+        return marker
 
     def _line_end_ms(self, index: int) -> int:
         line = self.timeline[index]
