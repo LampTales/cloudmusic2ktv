@@ -1178,7 +1178,14 @@ def admin_delete_user(user_id: str) -> Any:
 
 @app.errorhandler(NeteaseError)
 def handle_netease_error(error: NeteaseError) -> Any:
-    status_code = 401 if error.code in {301, -110, "audio_forbidden", "netease_reauth_required"} else 502
+    status_code = (
+        403
+        if error.code == "audio_vip_required"
+        else 401
+        if error.code
+        in {301, -110, "audio_forbidden", "netease_auth_required", "netease_reauth_required"}
+        else 502
+    )
     return error_response(str(error), error.code, status_code)
 
 
@@ -1257,7 +1264,13 @@ def anonymous_netease_client() -> Iterator[NeteaseClient]:
 
 
 def is_netease_auth_failure(error: NeteaseError) -> bool:
-    return error.code in {301, -110, "audio_forbidden", "netease_reauth_required"}
+    return error.code in {
+        301,
+        -110,
+        "audio_forbidden",
+        "netease_auth_required",
+        "netease_reauth_required",
+    }
 
 
 def song_local_status(song_id: int) -> dict[str, Any]:
