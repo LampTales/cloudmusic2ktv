@@ -479,11 +479,8 @@ function updateCastDirectLink() {
     updateBrowserCastHelp();
     return;
   }
-  const url = new URL(resolveBackendUrl(video.url), window.location.href);
-  // The access marker is added to the action link, not to the probe element.
   // Selecting a song must not count as playing it or cause a media request.
-  url.searchParams.set("access", "1");
-  link.href = url.href;
+  link.href = new URL(resolveBackendUrl(video.url), window.location.href).href;
   media.removeAttribute("src");
   media.load();
   browserButton.disabled = false;
@@ -636,11 +633,7 @@ async function requestCastUrl(video, prefetch = false) {
   // The backend intentionally returns proxy-friendly relative paths. Media
   // elements resolve those automatically, but clipboard and Web Share
   // consumers need a self-contained absolute URL.
-  const url = new URL(resolveBackendUrl(value), window.location.href);
-  // Browser remote playback uses a prefetched signed URL. Mark the actual
-  // artifact request instead of counting the page's idle prefetch as access.
-  if (prefetch) url.searchParams.set("access", "1");
-  return url.href;
+  return new URL(resolveBackendUrl(value), window.location.href).href;
 }
 
 async function openCastApp() {
@@ -684,7 +677,6 @@ function downloadCastVideo() {
   // URL parsing also works when the frontend is mounted below a path prefix.
   const url = new URL(resolveBackendUrl(video.url), window.location.href);
   url.searchParams.set("download", "1");
-  url.searchParams.set("access", "1");
   const link = document.createElement("a");
   link.href = url.href;
   link.download = video.download_name || video.filename;

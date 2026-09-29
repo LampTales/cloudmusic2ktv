@@ -191,8 +191,7 @@ def test_system_share_payload_contains_only_the_video_url():
 
     assert "const shareData = {url};" in script
     assert 'text: "CloudMusic2KTV 视频"' not in script
-    assert "const url = new URL(resolveBackendUrl(value), window.location.href);" in script
-    assert "return url.href;" in script
+    assert "return new URL(resolveBackendUrl(value), window.location.href).href;" in script
 
 
 def test_highlight_mode_is_primary_and_resolution_is_advanced():

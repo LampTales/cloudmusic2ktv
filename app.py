@@ -49,7 +49,7 @@ SESSION_COOKIE = "cloudmusic2ktv_session"
 SESSION_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_SESSION_DAYS", "90")) * 24 * 60 * 60
 MEDIA_URL_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_MEDIA_URL_TTL_SECONDS", "3600"))
 SONG_ACCESS_TOUCH_INTERVAL_SECONDS = int(
-    os.environ.get("CLOUDMUSIC2KTV_SONG_ACCESS_TOUCH_INTERVAL_SECONDS", "600")
+    os.environ.get("CLOUDMUSIC2KTV_SONG_ACCESS_TOUCH_INTERVAL_SECONDS", "86400")
 )
 SONG_DIRECTORY_LIMIT = int(os.environ.get("CLOUDMUSIC2KTV_SONG_DIRECTORY_LIMIT", "5000"))
 SONG_DIRECTORY_DELETE_COUNT = int(
@@ -1050,7 +1050,7 @@ def video_artifact(song_id: int, filename: str) -> Any:
     path = local_artifact_path(song_id, filename)
     if path is None:
         return error_response("文件尚未生成", "artifact_missing", 404)
-    if request.args.get("access") == "1" or request.args.get("download") == "1":
+    if VIDEO_FILE.fullmatch(filename):
         song_access.touch_song(
             song_id,
             "video_download" if request.args.get("download") == "1" else "video_play",

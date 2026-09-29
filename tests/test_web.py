@@ -222,7 +222,7 @@ def test_video_artifact_supports_head_and_byte_ranges_without_source_materials(m
     assert ranged.headers["Accept-Ranges"] == "bytes"
 
 
-def test_video_artifact_access_marker_touches_once_within_interval(monkeypatch, tmp_path):
+def test_video_artifact_touches_once_within_interval_without_access_marker(monkeypatch, tmp_path):
     monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
     monkeypatch.setattr(
         web_app,
@@ -235,13 +235,29 @@ def test_video_artifact_access_marker_touches_once_within_interval(monkeypatch, 
     video = directory / "ktv_720p.mp4"
     video.write_bytes(b"generated-video")
 
-    first = client.get(f"/api/video/artifact/123/{video.name}?access=1")
-    second = client.get(f"/api/video/artifact/123/{video.name}?access=1")
+    first = client.get(f"/api/video/artifact/123/{video.name}")
+    second = client.get(f"/api/video/artifact/123/{video.name}")
 
     assert first.status_code == second.status_code == 200
     record = json.loads((directory / "last_access.json").read_text(encoding="utf-8"))
     assert record["last_reason"] == "video_play"
     assert record["last_access_at"] > 0
+
+
+def test_video_preview_artifact_does_not_touch_song_access(monkeypatch, tmp_path):
+    monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    access = SongAccessStore(tmp_path)
+    monkeypatch.setattr(web_app, "song_access", access)
+    client = member_client(monkeypatch, tmp_path)
+    directory = tmp_path / "123_artist_song"
+    directory.mkdir()
+    preview = directory / "video_preview_012345abcdef.png"
+    preview.write_bytes(b"preview")
+
+    response = client.get(f"/api/video/artifact/123/{preview.name}")
+
+    assert response.status_code == 200
+    assert not (directory / "last_access.json").exists()
 
 
 def test_video_artifact_can_be_downloaded_as_an_attachment(monkeypatch, tmp_path):
