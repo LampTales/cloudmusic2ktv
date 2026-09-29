@@ -503,7 +503,7 @@ async function prefetchCastUrl(video) {
   const key = castUrlCacheKey(video);
   if (castUrlCache.has(key)) return castUrlCache.get(key);
   if (castUrlPending.has(key)) return castUrlPending.get(key);
-  const pending = requestCastUrl(video).catch(error => {
+  const pending = requestCastUrl(video, true).catch(error => {
     castUrlPending.delete(key);
     throw error;
   });
@@ -625,9 +625,10 @@ async function copyText(value) {
   return copied;
 }
 
-async function requestCastUrl(video) {
+async function requestCastUrl(video, prefetch = false) {
+  const query = prefetch ? "?prefetch=1" : "";
   const data = await api(
-    `/api/video/share/${encodeURIComponent(selectedSong.id)}/${encodeURIComponent(video.filename)}`,
+    `/api/video/share/${encodeURIComponent(selectedSong.id)}/${encodeURIComponent(video.filename)}${query}`,
     {headers: {}}
   );
   const value = data.share?.url;
@@ -635,7 +636,11 @@ async function requestCastUrl(video) {
   // The backend intentionally returns proxy-friendly relative paths. Media
   // elements resolve those automatically, but clipboard and Web Share
   // consumers need a self-contained absolute URL.
-  return new URL(resolveBackendUrl(value), window.location.href).href;
+  const url = new URL(resolveBackendUrl(value), window.location.href);
+  // Browser remote playback uses a prefetched signed URL. Mark the actual
+  // artifact request instead of counting the page's idle prefetch as access.
+  if (prefetch) url.searchParams.set("access", "1");
+  return url.href;
 }
 
 async function openCastApp() {

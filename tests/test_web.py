@@ -291,6 +291,25 @@ def test_video_share_url_can_be_used_without_a_browser_session(monkeypatch, tmp_
     assert shared_response.data == b"shared-video"
 
 
+def test_video_share_prefetch_does_not_touch_song_access(monkeypatch, tmp_path):
+    monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    access = SongAccessStore(tmp_path)
+    monkeypatch.setattr(web_app, "song_access", access)
+    client = member_client(monkeypatch, tmp_path)
+    directory = tmp_path / "123_artist_song"
+    directory.mkdir()
+    video = directory / "ktv_720p_012345abcdef.mp4"
+    video.write_bytes(b"shared-video")
+
+    prefetch = client.get(f"/api/video/share/123/{video.name}?prefetch=1")
+    assert prefetch.status_code == 200
+    assert not (directory / "last_access.json").exists()
+
+    actual = client.get(f"/api/video/share/123/{video.name}")
+    assert actual.status_code == 200
+    assert (directory / "last_access.json").exists()
+
+
 def test_expired_video_share_url_requires_login(monkeypatch, tmp_path):
     monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
     monkeypatch.setenv("CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY", "test-media-signing-key")

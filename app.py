@@ -1021,11 +1021,12 @@ def video_share(song_id: int, filename: str) -> Any:
     path = local_artifact_path(song_id, filename)
     if path is None:
         return error_response("文件尚未生成", "artifact_missing", 404)
-    song_access.touch_song(
-        song_id,
-        "share_link",
-        min_interval_seconds=SONG_ACCESS_TOUCH_INTERVAL_SECONDS,
-    )
+    if request.args.get("prefetch") != "1":
+        song_access.touch_song(
+            song_id,
+            "share_link",
+            min_interval_seconds=SONG_ACCESS_TOUCH_INTERVAL_SECONDS,
+        )
     expires_at = int(time.time()) + max(60, MEDIA_URL_TTL_SECONDS)
     return jsonify(
         {
