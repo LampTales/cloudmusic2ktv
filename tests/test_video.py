@@ -135,6 +135,46 @@ def test_opening_cover_keeps_fixed_size_while_moving(tmp_path):
     assert start_size == hold_size == middle_size == end_size == renderer._px(430)
 
 
+def test_vinyl_asset_is_centered_in_final_layout_and_slides_from_cover(tmp_path):
+    renderer = FrameRenderer(make_project(tmp_path), VideoOptions(spectrum=False))
+
+    assert renderer.vinyl.size == (1600, 1600)
+    assert renderer.vinyl.getpixel((0, 0))[3] == 0
+
+    hidden = renderer._opening_vinyl_geometry(3000)
+    cover_before_slip = renderer._opening_cover_geometry(3300)
+    vinyl_before_slip = renderer._opening_vinyl_geometry(3300)
+    cover_during_slip = renderer._opening_cover_geometry(3400)
+    vinyl_during_slip = renderer._opening_vinyl_geometry(3400)
+    middle = renderer._opening_vinyl_geometry(3600)
+    final = renderer._opening_vinyl_geometry(4000)
+    assert vinyl_before_slip[0] < cover_before_slip[0] + (
+        cover_before_slip[2] - renderer._px(video_module.VINYL_SIZE)
+    ) // 2
+    assert vinyl_during_slip[0] < cover_during_slip[0] + (
+        cover_during_slip[2] - renderer._px(video_module.VINYL_SIZE)
+    ) // 2
+    assert hidden[0] > middle[0] > final[0] == renderer._px(video_module.VINYL_X)
+    assert hidden[1] == renderer._px(221)
+    assert final[1] == renderer._px(video_module.VINYL_Y)
+    assert (final[2] - final[0], final[3] - final[1]) == (
+        renderer._px(video_module.VINYL_SIZE), renderer._px(video_module.VINYL_SIZE)
+    )
+
+
+def test_vinyl_slide_uses_early_motion_and_late_braking(tmp_path):
+    renderer = FrameRenderer(make_project(tmp_path), VideoOptions(spectrum=False))
+    start = video_module.OPENING_VINYL_SLIDE_START_RATIO
+    end = video_module.OPENING_VINYL_SLIDE_END_RATIO
+    values = [renderer._opening_vinyl_slide_progress(start + (end - start) * index / 10) for index in range(11)]
+
+    assert values[0] == 0
+    assert values[-1] == 1
+    assert values[5] > video_module._smoothstep(0.5)
+    assert values[8] > video_module._smoothstep(0.8)
+    assert values == sorted(values)
+
+
 def test_opening_animation_fills_the_four_second_intro(monkeypatch, tmp_path):
     renderer = FrameRenderer(make_project(tmp_path), VideoOptions(spectrum=False))
     opening = Image.new("RGB", renderer.options.size, (0, 0, 0))
