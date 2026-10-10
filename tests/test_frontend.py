@@ -155,8 +155,8 @@ def test_all_netease_profile_and_song_images_are_upgraded_to_https():
     assert '$("#cover").src = secureNeteaseMediaUrl(song.cover_url)' in script
     assert "image.src = secureNeteaseMediaUrl(user.avatarUrl)" in script
     assert "avatar.src = secureNeteaseMediaUrl(user.avatarUrl)" in script
-    assert '$("#queueCover").src = secureNeteaseMediaUrl(song.cover_url)' in script
-    assert "image.src = secureNeteaseMediaUrl(job.song.cover_url)" in script
+    assert 'setNeteaseThumbnail($("#queueCover"), song.cover_url, 48, 96)' in script
+    assert "setNeteaseThumbnail(image, job.song.cover_url, 48, 96)" in script
 
 
 def test_login_uses_password_manager_form_semantics():
@@ -191,7 +191,7 @@ def test_system_share_payload_contains_only_the_video_url():
 
     assert "const shareData = {url};" in script
     assert 'text: "CloudMusic2KTV 视频"' not in script
-    assert "new URL(resolveBackendUrl(value), window.location.href).href" in script
+    assert "return new URL(resolveBackendUrl(value), window.location.href).href;" in script
 
 
 def test_highlight_mode_is_primary_and_resolution_is_advanced():

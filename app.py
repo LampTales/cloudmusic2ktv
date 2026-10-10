@@ -30,6 +30,7 @@ from cloudmusic2ktv.access import DEFAULT_APPLICATION_LIMIT
 from cloudmusic2ktv.playlist_cache import PlaylistCache
 from cloudmusic2ktv.service import local_song_status, parse_song_id, safe_filename
 from cloudmusic2ktv.sessions import FileSessionStore
+from cloudmusic2ktv.song_access import SongAccessStore
 from cloudmusic2ktv.video import (
     VideoError,
     VideoJobManager,
@@ -47,6 +48,13 @@ OUTPUTS = ROOT / "outputs"
 SESSION_COOKIE = "cloudmusic2ktv_session"
 SESSION_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_SESSION_DAYS", "90")) * 24 * 60 * 60
 MEDIA_URL_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_MEDIA_URL_TTL_SECONDS", "3600"))
+SONG_ACCESS_TOUCH_INTERVAL_SECONDS = int(
+    os.environ.get("CLOUDMUSIC2KTV_SONG_ACCESS_TOUCH_INTERVAL_SECONDS", "86400")
+)
+SONG_DIRECTORY_LIMIT = int(os.environ.get("CLOUDMUSIC2KTV_SONG_DIRECTORY_LIMIT", "5000"))
+SONG_DIRECTORY_DELETE_COUNT = int(
+    os.environ.get("CLOUDMUSIC2KTV_SONG_DIRECTORY_DELETE_COUNT", "1000")
+)
 PLAYLIST_CACHE_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_PLAYLIST_CACHE_TTL_SECONDS", "21600"))
 PLAYLIST_CACHE_MAX_ENTRIES = int(os.environ.get("CLOUDMUSIC2KTV_PLAYLIST_CACHE_MAX_ENTRIES", "32"))
 APPLICATION_LIMIT = int(os.environ.get("CLOUDMUSIC2KTV_APPLICATION_LIMIT", str(DEFAULT_APPLICATION_LIMIT)))
@@ -133,6 +141,7 @@ allowlist = AllowlistStore(INSTANCE / "allowlist.json")
 website_accounts = WebsiteAccountStore(INSTANCE / "accounts.json")
 netease_bindings = NeteaseBindingStore(INSTANCE / "netease_bindings.json")
 video_jobs = VideoJobManager(OUTPUTS, state_path=INSTANCE / "video_jobs.json")
+song_access = SongAccessStore(OUTPUTS)
 playlist_cache = PlaylistCache(
     ttl_seconds=PLAYLIST_CACHE_TTL_SECONDS,
     max_playlists=PLAYLIST_CACHE_MAX_ENTRIES,
@@ -893,6 +902,13 @@ def download_song() -> Any:
                         code="netease_reauth_required",
                     ) from anonymous_error
                 raise
+        downloaded_directory = Path(result["directory"])
+        song_access.touch_directory(downloaded_directory, "download")
+        song_access.cleanup(
+            threshold=SONG_DIRECTORY_LIMIT,
+            delete_count=SONG_DIRECTORY_DELETE_COUNT,
+            protected_names=protected_song_directory_names({downloaded_directory.name}),
+        )
         result["local"] = local_song_status(OUTPUTS, song_id)
         return jsonify({"ok": True, "result": result})
     finally:
@@ -952,6 +968,7 @@ def video_render() -> Any:
     options = VideoOptions.from_mapping(body.get("options"))
     # Fail early before accepting a background job.
     project = VideoProject.load(OUTPUTS, song_id)
+    song_access.touch_directory(project.directory, "video_queue")
     job = video_jobs.start(song_id, options, project.song)
     return jsonify({"ok": True, "job": job})
 
@@ -1004,6 +1021,12 @@ def video_share(song_id: int, filename: str) -> Any:
     path = local_artifact_path(song_id, filename)
     if path is None:
         return error_response("文件尚未生成", "artifact_missing", 404)
+    if request.args.get("prefetch") != "1":
+        song_access.touch_song(
+            song_id,
+            "share_link",
+            min_interval_seconds=SONG_ACCESS_TOUCH_INTERVAL_SECONDS,
+        )
     expires_at = int(time.time()) + max(60, MEDIA_URL_TTL_SECONDS)
     return jsonify(
         {
@@ -1027,6 +1050,12 @@ def video_artifact(song_id: int, filename: str) -> Any:
     path = local_artifact_path(song_id, filename)
     if path is None:
         return error_response("文件尚未生成", "artifact_missing", 404)
+    if VIDEO_FILE.fullmatch(filename):
+        song_access.touch_song(
+            song_id,
+            "video_download" if request.args.get("download") == "1" else "video_play",
+            min_interval_seconds=SONG_ACCESS_TOUCH_INTERVAL_SECONDS,
+        )
     return send_file(
         path,
         conditional=True,
@@ -1150,7 +1179,14 @@ def admin_delete_user(user_id: str) -> Any:
 
 @app.errorhandler(NeteaseError)
 def handle_netease_error(error: NeteaseError) -> Any:
-    status_code = 401 if error.code in {301, -110, "audio_forbidden", "netease_reauth_required"} else 502
+    status_code = (
+        403
+        if error.code == "audio_vip_required"
+        else 401
+        if error.code
+        in {301, -110, "audio_forbidden", "netease_auth_required", "netease_reauth_required"}
+        else 502
+    )
     return error_response(str(error), error.code, status_code)
 
 
@@ -1229,7 +1265,13 @@ def anonymous_netease_client() -> Iterator[NeteaseClient]:
 
 
 def is_netease_auth_failure(error: NeteaseError) -> bool:
-    return error.code in {301, -110, "audio_forbidden", "netease_reauth_required"}
+    return error.code in {
+        301,
+        -110,
+        "audio_forbidden",
+        "netease_auth_required",
+        "netease_reauth_required",
+    }
 
 
 def song_local_status(song_id: int) -> dict[str, Any]:
@@ -1249,6 +1291,26 @@ def begin_download(song_id: int) -> bool:
 def finish_download(song_id: int) -> None:
     with download_state_lock:
         active_downloads.discard(song_id)
+
+
+def protected_song_directory_names(extra: set[str] | None = None) -> set[str]:
+    """Return directories that must not be removed during LRU cleanup."""
+    song_ids: set[int] = set()
+    with download_state_lock:
+        song_ids.update(active_downloads)
+    queue = video_jobs.queue_status()
+    jobs = list(queue.get("queued") or [])
+    if queue.get("current"):
+        jobs.append(queue["current"])
+    for job in jobs:
+        try:
+            song_ids.add(int(job.get("song_id")))
+        except (AttributeError, TypeError, ValueError):
+            continue
+    names = set(extra or ())
+    for song_id in song_ids:
+        names.update(path.name for path in OUTPUTS.glob(f"{song_id}_*") if path.is_dir())
+    return names
 
 
 def job_with_artifact_url(value: dict[str, Any]) -> dict[str, Any]:

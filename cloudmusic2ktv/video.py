@@ -26,7 +26,8 @@ OPENING_SECONDS = 4.0
 OPENING_HOLD_MS = 3_000
 OPENING_TRANSITION_MS = int(OPENING_SECONDS * 1000) - OPENING_HOLD_MS
 OPENING_COVER_MOVE_RATIO = 0.58
-OPENING_DISC_START_RATIO = 0.62
+OPENING_VINYL_SLIDE_START_RATIO = 0.26
+OPENING_VINYL_SLIDE_END_RATIO = 0.98
 INTERLUDE_THRESHOLD_MS = 15_000
 INTERLUDE_COUNTDOWN_MS = 4_000
 MODEL_INTERLUDE_HOLD_MS = 4_000
@@ -35,11 +36,18 @@ MODEL_INTERLUDE_THRESHOLD_MS = MODEL_INTERLUDE_HOLD_MS + MODEL_INTERLUDE_BLANK_M
 MAX_INTERLUDE_SWEEP_MS = 8_000
 COUNTDOWN_TOP = 720
 SPECTRUM_CACHE_VERSION = 2
+VINYL_ASSET_PATH = Path(__file__).resolve().parent / "assets" / "vinyl.png"
+VINYL_X = 90
+VINYL_Y = 228
+VINYL_SIZE = 420
 # Short CTC gaps are often frame-boundary artifacts rather than intentional
 # pauses.  Model sweep rendering bridges gaps up to this threshold.  Keep the
 # policy in the renderer (the alignment artifact remains unchanged); operators
 # can tune it without exposing another front-end control.
 MODEL_SWEEP_GAP_THRESHOLD_MS = 200
+# A delayed onset may keep the preceding line visible inside a continuous
+# paragraph, but it must not extend that line indefinitely into the next one.
+MODEL_SWEEP_MAX_LEAD_IN_MS = 800
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 LYRIC_MARKER = re.compile(
     r"^[~*_\-\[\]{}()<>「」『』【】〔〕·•.,!?！？:：]*(?:间奏|間奏|instrumental|interlude|music)"
@@ -238,6 +246,11 @@ class FrameRenderer:
         self.width, self.height = options.size
         self.scale = self.width / 1920
         self.cover = Image.open(project.cover_path).convert("RGB")
+        try:
+            with Image.open(VINYL_ASSET_PATH) as vinyl:
+                self.vinyl = vinyl.convert("RGBA")
+        except OSError as exc:
+            raise VideoError("黑胶唱片素材不存在或无法读取") from exc
         self.accent = self._accent_color()
         self.background = self._make_background()
         self.static_main = self._make_static_main()
@@ -369,21 +382,13 @@ class FrameRenderer:
         transition = _ratio(video_time_ms, OPENING_HOLD_MS, int(OPENING_SECONDS * 1000))
         cover_x, cover_y, cover_size = self._opening_cover_geometry(video_time_ms)
 
-        draw = ImageDraw.Draw(frame, "RGBA")
-        # The disc is deliberately absent during the hold. It starts only after
-        # the cover has nearly reached its main-layout position.
-        disc_progress = _smoothstep(_ratio(transition, OPENING_DISC_START_RATIO, 0.92))
-        if disc_progress > 0:
-            # Keep the disc fixed at its final position and reveal it only
-            # after the cover has settled, so it reads as a background layer.
-            disc_layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
-            disc_draw = ImageDraw.Draw(disc_layer, "RGBA")
-            self._draw_disc(
-                disc_draw,
-                (self._px(116), self._px(238), self._px(566), self._px(688)),
-                opacity=disc_progress,
-            )
-            frame = Image.alpha_composite(frame.convert("RGBA"), disc_layer).convert("RGB")
+        # Keep the vinyl centered behind the cover during the hold and its
+        # initial move. Once the cover settles, continue sliding the vinyl
+        # left so it reads as a record coming out of its sleeve.
+        disc_layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+        disc_box = self._opening_vinyl_geometry(video_time_ms)
+        self._draw_disc(disc_layer, disc_box)
+        frame = Image.alpha_composite(frame.convert("RGBA"), disc_layer).convert("RGB")
 
         cover = ImageOps.fit(self.cover, (cover_size, cover_size), method=_resampling())
         cover = _round_image(cover, self._px(18))
@@ -438,6 +443,42 @@ class FrameRenderer:
         cover_x = round(start_x + (target_x - start_x) * motion)
         return cover_x, target_y, cover_size
 
+    def _opening_vinyl_geometry(self, video_time_ms: int) -> tuple[int, int, int, int]:
+        transition = _ratio(video_time_ms, OPENING_HOLD_MS, int(OPENING_SECONDS * 1000))
+        cover_x, cover_y, cover_size = self._opening_cover_geometry(video_time_ms)
+        vinyl_size = self._px(VINYL_SIZE)
+        hidden_x = cover_x + (cover_size - vinyl_size) // 2
+        hidden_y = cover_y + (cover_size - vinyl_size) // 2
+        # The vinyl follows the cover from the beginning. During the cover's
+        # deceleration, add a separate eased slip so the record keeps moving
+        # while the cover settles instead of appearing to start on its own.
+        slide = self._opening_vinyl_slide_progress(transition)
+        target_cover_x = self._px(250)
+        target_cover_y = self._px(216)
+        final_x = self._px(VINYL_X)
+        final_y = self._px(VINYL_Y)
+        slip_x = final_x - (target_cover_x + (cover_size - vinyl_size) // 2)
+        slip_y = final_y - (target_cover_y + (cover_size - vinyl_size) // 2)
+        left = round(hidden_x + slip_x * slide)
+        top = round(hidden_y + slip_y * slide)
+        return left, top, left + vinyl_size, top + vinyl_size
+
+    @staticmethod
+    def _opening_vinyl_slide_progress(transition: float) -> float:
+        """Return a late-braking progress curve for the record's relative slip.
+
+        The cover and vinyl already share the cover's movement through
+        ``hidden_x``. This extra displacement starts smoothly, gains speed
+        earlier than the old symmetric smoothstep, then brakes more strongly
+        near the final position. The curve gives the visual impression of
+        increasing friction as more of the record leaves the sleeve.
+        """
+        progress = _ratio(transition, OPENING_VINYL_SLIDE_START_RATIO, OPENING_VINYL_SLIDE_END_RATIO)
+        # A 1.6-power ease-out keeps the faster travel phase longer, then its
+        # braking acceleration grows more sharply near the end, modelling the
+        # exposed record meeting more resistance as it leaves the sleeve.
+        return 1.0 - (1.0 - progress) ** 1.6
+
     def _draw_fade_components(self, frame: Image.Image, song_time_ms: int, progress: float) -> None:
         reveal = _smoothstep(_ratio(progress, 0.48, 0.92))
         if reveal <= 0:
@@ -456,36 +497,27 @@ class FrameRenderer:
 
     def _draw_disc(
         self,
-        draw: ImageDraw.ImageDraw,
+        canvas: Image.Image,
         disc_box: tuple[int, int, int, int],
         *,
         opacity: float = 1.0,
     ) -> None:
+        """Composite the supplied vinyl artwork into ``disc_box``.
+
+        The asset contains the record's own label and lighting. Keeping this
+        operation as a regular image composite lets the opening animation use
+        the same artwork at a moving position as the final layout.
+        """
         opacity = max(0.0, min(1.0, opacity))
-        disc_alpha = round(255 * opacity)
-        outline_alpha = round(210 * opacity)
-        draw.ellipse(
-            disc_box,
-            fill=(8, 9, 12, disc_alpha),
-            outline=(74, 77, 83, disc_alpha),
-            width=self._px(3),
-        )
-        for inset in range(22, 188, 18):
-            d = self._px(inset)
-            draw.ellipse(
-                (disc_box[0] + d, disc_box[1] + d, disc_box[2] - d, disc_box[3] - d),
-                outline=(49, 52, 58, outline_alpha), width=max(1, self._px(1)),
-            )
-        label_box = tuple(
-            value + self._px(155 if index < 2 else -155)
-            for index, value in enumerate(disc_box)
-        )
-        draw.ellipse(
-            label_box,
-            fill=(*self.accent, round(230 * opacity)),
-            outline=(245, 245, 245, round(190 * opacity)),
-            width=self._px(2),
-        )
+        left, top, right, bottom = disc_box
+        size = (max(1, right - left), max(1, bottom - top))
+        vinyl = ImageOps.contain(self.vinyl, size, method=_resampling())
+        if opacity < 1.0:
+            vinyl = vinyl.copy()
+            vinyl.putalpha(vinyl.getchannel("A").point(lambda value: round(value * opacity)))
+        layer = Image.new("RGBA", size, (0, 0, 0, 0))
+        layer.alpha_composite(vinyl, ((size[0] - vinyl.width) // 2, (size[1] - vinyl.height) // 2))
+        canvas.alpha_composite(layer, (left, top))
 
     def _make_background(self) -> Image.Image:
         size = (self.width, self.height)
@@ -535,9 +567,12 @@ class FrameRenderer:
             (self._px(110), self._px(124)), artist, font=self._font(23, text=artist), fill=(190, 197, 209, 255)
         )
 
-        # Vinyl disc behind the cover.
-        disc_box = (self._px(116), self._px(238), self._px(566), self._px(688))
-        self._draw_disc(draw, disc_box)
+        # Vinyl artwork behind the cover.
+        disc_box = (
+            self._px(VINYL_X), self._px(VINYL_Y),
+            self._px(VINYL_X + VINYL_SIZE), self._px(VINYL_Y + VINYL_SIZE),
+        )
+        self._draw_disc(overlay, disc_box)
 
         cover_size = self._px(430)
         cover = ImageOps.fit(self.cover, (cover_size, cover_size), method=_resampling())
@@ -610,21 +645,79 @@ class FrameRenderer:
 
     def _lyric_state(self, song_time_ms: int) -> dict[str, Any]:
         starts = [int(line["start_ms"]) for line in self.timeline]
+        # In model sweep modes a line can have a short lead-in between its
+        # source lyric marker and the first character that is actually
+        # highlighted.  Keep the preceding pair on screen during that
+        # lead-in; switching at the source marker makes the previous line
+        # disappear before the next line has any active colour.
+        activation_starts: list[int] = []
+        for index in range(len(self.timeline)):
+            marker = starts[index]
+            # Paragraph starts and post-interlude lines remain marker-based.
+            # Only a continuous pair gets the delayed-onset transition.
+            if index == 0 or self._is_interlude_after(index - 1):
+                activation = marker
+            else:
+                activation = self._line_activation_start(index)
+                # Keep search order valid when adjacent source markers are
+                # closer than a capped lead-in.
+                activation = max(activation, activation_starts[-1])
+            activation_starts.append(activation)
+        # The first line has no preceding pair to preserve.  Keep its
+        # original marker-based entrance and let the per-character renderer
+        # show it inactive until its first unit starts.
         if song_time_ms < starts[0]:
             if self.options.interlude_cue and starts[0] - song_time_ms <= INTERLUDE_COUNTDOWN_MS:
                 return {"kind": "cue", "index": 0, "remaining": starts[0] - song_time_ms}
             return {"kind": "blank"}
-        index = int(np.searchsorted(starts, song_time_ms, side="right") - 1)
+        if song_time_ms < activation_starts[0]:
+            return {"kind": "active", "index": 0, "progress": _ratio(song_time_ms, starts[0], self._line_end_ms(0))}
+        index = int(np.searchsorted(activation_starts, song_time_ms, side="right") - 1)
         start = starts[index]
         end = self._line_end_ms(index)
         if index + 1 < len(starts) and self._is_interlude_after(index):
             if song_time_ms <= end:
                 return {"kind": "active", "index": index, "progress": _ratio(song_time_ms, start, end)}
+            # Interlude boundaries remain marker-based.  Delayed character
+            # onsets only affect transitions inside a continuous paragraph.
             next_start = starts[index + 1]
             if self.options.interlude_cue and song_time_ms >= next_start - INTERLUDE_COUNTDOWN_MS:
                 return {"kind": "cue", "index": index + 1, "remaining": next_start - song_time_ms}
             return {"kind": "blank"}
         return {"kind": "active", "index": index, "progress": _ratio(song_time_ms, start, end)}
+
+    def _line_activation_start(self, index: int) -> int:
+        """Return when a model sweep can first visibly start for a line.
+
+        Alignment ``start_ms`` is the source lyric marker, while
+        ``display_units`` (or the diagnostic token fallbacks) contains the
+        renderer-facing onset.  Only model sweep modes use the latter.  A
+        missing/empty timing list falls back to the marker so legacy and
+        sentence-level rendering retain their existing timing semantics.
+        """
+        line = self.timeline[index]
+        marker = int(line.get("start_ms", 0))
+        if not (
+            self.options.alignment_mode == "model"
+            and self.options.lyric_highlight_mode in {"sweep", "smooth"}
+        ):
+            return marker
+        spans = line.get("display_units") or line.get("tokens") or line.get("mora") or []
+        if not isinstance(spans, list):
+            return marker
+        all_starts: list[int] = []
+        for item in spans:
+            if not isinstance(item, dict):
+                continue
+            try:
+                value = max(marker, int(item.get("start_ms", marker)))
+            except (TypeError, ValueError):
+                continue
+            all_starts.append(value)
+        if all_starts:
+            onset = min(all_starts)
+            return marker + min(max(0, onset - marker), MODEL_SWEEP_MAX_LEAD_IN_MS)
+        return marker
 
     def _line_end_ms(self, index: int) -> int:
         line = self.timeline[index]

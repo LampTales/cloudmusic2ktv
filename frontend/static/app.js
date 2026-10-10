@@ -479,13 +479,10 @@ function updateCastDirectLink() {
     updateBrowserCastHelp();
     return;
   }
-  const url = resolveBackendUrl(video.url);
-  link.href = url;
-  if (media.src !== url) {
-    media.src = url;
-    media.preload = "metadata";
-    media.load();
-  }
+  // Selecting a song must not count as playing it or cause a media request.
+  link.href = new URL(resolveBackendUrl(video.url), window.location.href).href;
+  media.removeAttribute("src");
+  media.load();
   browserButton.disabled = false;
   // Obtain the device-safe URL before the user's click. Calling prompt() only
   // after an awaited request can consume the transient user activation that
@@ -503,7 +500,7 @@ async function prefetchCastUrl(video) {
   const key = castUrlCacheKey(video);
   if (castUrlCache.has(key)) return castUrlCache.get(key);
   if (castUrlPending.has(key)) return castUrlPending.get(key);
-  const pending = requestCastUrl(video).catch(error => {
+  const pending = requestCastUrl(video, true).catch(error => {
     castUrlPending.delete(key);
     throw error;
   });
@@ -512,12 +509,6 @@ async function prefetchCastUrl(video) {
     const value = await pending;
     castUrlPending.delete(key);
     castUrlCache.set(key, value);
-    const media = $("#castMediaElement");
-    if (media.src !== value) {
-      media.src = value;
-      media.preload = "metadata";
-      media.load();
-    }
     return value;
   } catch {
     return null;
@@ -631,9 +622,10 @@ async function copyText(value) {
   return copied;
 }
 
-async function requestCastUrl(video) {
+async function requestCastUrl(video, prefetch = false) {
+  const query = prefetch ? "?prefetch=1" : "";
   const data = await api(
-    `/api/video/share/${encodeURIComponent(selectedSong.id)}/${encodeURIComponent(video.filename)}`,
+    `/api/video/share/${encodeURIComponent(selectedSong.id)}/${encodeURIComponent(video.filename)}${query}`,
     {headers: {}}
   );
   const value = data.share?.url;
@@ -2068,7 +2060,7 @@ function showQueue(queue) {
   $("#queueCurrent").classList.toggle("hidden", !current);
   if (current) {
     const song = current.song || {};
-    $("#queueCover").src = secureNeteaseMediaUrl(song.cover_url);
+    setNeteaseThumbnail($("#queueCover"), song.cover_url, 48, 96);
     $("#queueCover").classList.toggle("hidden", !song.cover_url);
     $("#queueSong").textContent = `${song.name || `歌曲 ${current.song_id}`} — ${song.artist || "未知歌手"}`;
     $("#queueMessage").textContent = `${current.resolution} · ${current.message || "等待渲染"}`;
@@ -2138,7 +2130,10 @@ function renderQueueDetails() {
       row.addEventListener("click", () => selectCompletedTask(job));
     }
     if (job.song?.cover_url) {
-      const image = document.createElement("img"); image.src = secureNeteaseMediaUrl(job.song.cover_url); image.alt = "";
+      const image = document.createElement("img");
+      setNeteaseThumbnail(image, job.song.cover_url, 48, 96);
+      image.loading = "lazy";
+      image.alt = "";
       row.append(image);
     }
     const copy = document.createElement("div");

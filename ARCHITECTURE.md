@@ -88,9 +88,11 @@
 
 模型 `smooth` 扫色只在渲染器的临时副本上处理最终 `display_units`：相邻非空白字符之间的正间隔不超过 200ms 时在中点连接；空白字符和更长的间隔保持原样。该阈值是渲染器环境变量 `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS`，不修改 `alignment.json`。
 
+模型 `smooth`/`sweep` 在连续段落内的句间切换以后一行首个 `display_unit` 的实际起点为准，而不是只使用该行的 `start_ms`。新增延长按“后一行实际起点 − 后一行 `start_ms`”计算，最多 800ms；上一行扫色完成到句末的已有时间不计入该上限。缺少字级时间数据时仍回退到 `start_ms`，段落开头、结尾和间奏边界仍沿用原有的行级时间。
+
 `VideoOptions` 覆盖歌词语言、扫色、背景、强调色、音频、分辨率、画质、开场、间奏和频谱。`FrameRenderer` 同时用于预览和正式视频；FFmpeg 输出 H.264/AAC。视频先写 `.part.mp4` 后原子替换，artifact 文件名通过固定正则且必须位于歌曲目录内。
 
-正片复用静态底图，频谱仅在柱形覆盖的局部区域做 alpha 合成。字体、字号适配和文字测量使用渲染器实例内的有界缓存；扫色仍按整句排版、按既有时间裁剪，仅缓存最多四张包含描边的局部高亮图层。缓存不落盘、不跨任务共享，也不保存播放进度，预览可直接跳到任意时间；恢复任务时由新渲染器重建。`tests/test_render_equivalence.py` 对照整帧合成路径验证两种对齐模式、两种分辨率、开头过渡和缓存重建的像素一致性。
+正片复用静态底图，频谱仅在柱形覆盖的局部区域做 alpha 合成。封面后的唱片使用仓库内的 `cloudmusic2ktv/assets/vinyl.png` 素材；开场先将唱片隐藏在封面后方并跟随封面移动，在封面减速阶段逐渐增加左滑位移，正片使用相同的 `420×420` 唱片几何位置。字体、字号适配和文字测量使用渲染器实例内的有界缓存；扫色仍按整句排版、按既有时间裁剪，仅缓存最多四张包含描边的局部高亮图层。缓存不落盘、不跨任务共享，也不保存播放进度，预览可直接跳到任意时间；恢复任务时由新渲染器重建。`tests/test_render_equivalence.py` 对照整帧合成路径验证两种对齐模式、两种分辨率、开头过渡和缓存重建的像素一致性。
 
 ### 模型参数与依赖
 
@@ -121,6 +123,8 @@ CTC 缓存签名包含模型路径、质量门限和库的流水线版本；换�
 ## Artifact、URL 与前端代理
 
 artifact 接口支持 HEAD、HTTP Range、下载文件名和流式响应；代理必须保留 `Range`、`Content-Range`、`Content-Length`、`Content-Disposition`。普通 URL 需要网站 Cookie，投屏 URL 使用后端 HMAC 密钥和过期时间，设备无需网站会话。签名密钥位于 `instance/media_signing.key` 或环境变量，不能进入前端。
+
+歌曲目录的最后访问时间保存在各目录自己的 `last_access.json` 中，不使用统筹所有歌曲的索引文件。下载素材完成、加入视频队列、生成实际投屏链接，以及访问 MP4 artifact 都会登记访问；播放器的 Range 请求只会在 `CLOUDMUSIC2KTV_SONG_ACCESS_TOUCH_INTERVAL_SECONDS` 间隔后再次登记（默认 86400 秒），预览 PNG 不计为播放，避免页面初始化触发访问记录。目录数超过 `CLOUDMUSIC2KTV_SONG_DIRECTORY_LIMIT` 时，在下一次素材下载完成后逐目录读取访问时间，按访问时间清理最多 `CLOUDMUSIC2KTV_SONG_DIRECTORY_DELETE_COUNT` 个目录。旧目录没有记录时使用目录 mtime，清理每个候选前会重新检查时间；活跃下载、视频任务和刚完成下载的目录受保护。
 
 `frontend/static/app.js` 从运行时 `config.js` 读取 API origin/base path，留空时使用同源 `/api`。`frontend_server.py` 仅用于开发，生产使用 Nginx 镜像。
 

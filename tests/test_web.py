@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
@@ -6,6 +8,7 @@ import app as web_app
 from cloudmusic2ktv.access import AllowlistStore
 from cloudmusic2ktv.netease import NeteaseClient
 from cloudmusic2ktv.sessions import FileSessionStore
+from cloudmusic2ktv.song_access import SongAccessStore
 from tests.helpers import set_session_cookie
 
 
@@ -219,6 +222,44 @@ def test_video_artifact_supports_head_and_byte_ranges_without_source_materials(m
     assert ranged.headers["Accept-Ranges"] == "bytes"
 
 
+def test_video_artifact_touches_once_within_interval_without_access_marker(monkeypatch, tmp_path):
+    monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    monkeypatch.setattr(
+        web_app,
+        "song_access",
+        SongAccessStore(tmp_path),
+    )
+    client = member_client(monkeypatch, tmp_path)
+    directory = tmp_path / "123_artist_song"
+    directory.mkdir()
+    video = directory / "ktv_720p.mp4"
+    video.write_bytes(b"generated-video")
+
+    first = client.get(f"/api/video/artifact/123/{video.name}")
+    second = client.get(f"/api/video/artifact/123/{video.name}")
+
+    assert first.status_code == second.status_code == 200
+    record = json.loads((directory / "last_access.json").read_text(encoding="utf-8"))
+    assert record["last_reason"] == "video_play"
+    assert record["last_access_at"] > 0
+
+
+def test_video_preview_artifact_does_not_touch_song_access(monkeypatch, tmp_path):
+    monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    access = SongAccessStore(tmp_path)
+    monkeypatch.setattr(web_app, "song_access", access)
+    client = member_client(monkeypatch, tmp_path)
+    directory = tmp_path / "123_artist_song"
+    directory.mkdir()
+    preview = directory / "video_preview_012345abcdef.png"
+    preview.write_bytes(b"preview")
+
+    response = client.get(f"/api/video/artifact/123/{preview.name}")
+
+    assert response.status_code == 200
+    assert not (directory / "last_access.json").exists()
+
+
 def test_video_artifact_can_be_downloaded_as_an_attachment(monkeypatch, tmp_path):
     monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
     client = member_client(monkeypatch, tmp_path)
@@ -264,6 +305,25 @@ def test_video_share_url_can_be_used_without_a_browser_session(monkeypatch, tmp_
     shared_response = anonymous.get(share["url"])
     assert shared_response.status_code == 200
     assert shared_response.data == b"shared-video"
+
+
+def test_video_share_prefetch_does_not_touch_song_access(monkeypatch, tmp_path):
+    monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
+    access = SongAccessStore(tmp_path)
+    monkeypatch.setattr(web_app, "song_access", access)
+    client = member_client(monkeypatch, tmp_path)
+    directory = tmp_path / "123_artist_song"
+    directory.mkdir()
+    video = directory / "ktv_720p_012345abcdef.mp4"
+    video.write_bytes(b"shared-video")
+
+    prefetch = client.get(f"/api/video/share/123/{video.name}?prefetch=1")
+    assert prefetch.status_code == 200
+    assert not (directory / "last_access.json").exists()
+
+    actual = client.get(f"/api/video/share/123/{video.name}")
+    assert actual.status_code == 200
+    assert (directory / "last_access.json").exists()
 
 
 def test_expired_video_share_url_requires_login(monkeypatch, tmp_path):

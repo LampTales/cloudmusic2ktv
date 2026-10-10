@@ -135,6 +135,46 @@ def test_opening_cover_keeps_fixed_size_while_moving(tmp_path):
     assert start_size == hold_size == middle_size == end_size == renderer._px(430)
 
 
+def test_vinyl_asset_is_centered_in_final_layout_and_slides_from_cover(tmp_path):
+    renderer = FrameRenderer(make_project(tmp_path), VideoOptions(spectrum=False))
+
+    assert renderer.vinyl.size == (1600, 1600)
+    assert renderer.vinyl.getpixel((0, 0))[3] == 0
+
+    hidden = renderer._opening_vinyl_geometry(3000)
+    cover_before_slip = renderer._opening_cover_geometry(3300)
+    vinyl_before_slip = renderer._opening_vinyl_geometry(3300)
+    cover_during_slip = renderer._opening_cover_geometry(3400)
+    vinyl_during_slip = renderer._opening_vinyl_geometry(3400)
+    middle = renderer._opening_vinyl_geometry(3600)
+    final = renderer._opening_vinyl_geometry(4000)
+    assert vinyl_before_slip[0] < cover_before_slip[0] + (
+        cover_before_slip[2] - renderer._px(video_module.VINYL_SIZE)
+    ) // 2
+    assert vinyl_during_slip[0] < cover_during_slip[0] + (
+        cover_during_slip[2] - renderer._px(video_module.VINYL_SIZE)
+    ) // 2
+    assert hidden[0] > middle[0] > final[0] == renderer._px(video_module.VINYL_X)
+    assert hidden[1] == renderer._px(221)
+    assert final[1] == renderer._px(video_module.VINYL_Y)
+    assert (final[2] - final[0], final[3] - final[1]) == (
+        renderer._px(video_module.VINYL_SIZE), renderer._px(video_module.VINYL_SIZE)
+    )
+
+
+def test_vinyl_slide_uses_early_motion_and_late_braking(tmp_path):
+    renderer = FrameRenderer(make_project(tmp_path), VideoOptions(spectrum=False))
+    start = video_module.OPENING_VINYL_SLIDE_START_RATIO
+    end = video_module.OPENING_VINYL_SLIDE_END_RATIO
+    values = [renderer._opening_vinyl_slide_progress(start + (end - start) * index / 10) for index in range(11)]
+
+    assert values[0] == 0
+    assert values[-1] == 1
+    assert values[5] > video_module._smoothstep(0.5)
+    assert values[8] > video_module._smoothstep(0.8)
+    assert values == sorted(values)
+
+
 def test_opening_animation_fills_the_four_second_intro(monkeypatch, tmp_path):
     renderer = FrameRenderer(make_project(tmp_path), VideoOptions(spectrum=False))
     opening = Image.new("RGB", renderer.options.size, (0, 0, 0))
@@ -270,6 +310,126 @@ def test_active_lyric_is_whole_line_or_uniform_sweep(tmp_path):
 
     assert whole_line_progress == [1.0]
     assert sweep_progress == [0.5]
+
+
+def test_model_sweep_keeps_previous_line_until_next_display_unit_starts(tmp_path):
+    project = make_project(tmp_path / "project")
+    lines = [
+        {
+            "source_index": 0,
+            "text": "第一句",
+            "start_ms": 1000,
+            "end_ms": 3000,
+            "display_units": [
+                {"text": "第", "start_ms": 1100, "end_ms": 1500},
+                {"text": "一", "start_ms": 1500, "end_ms": 1900},
+                {"text": "句", "start_ms": 1900, "end_ms": 2200},
+            ],
+        },
+        {
+            "source_index": 1,
+            "text": "第二句",
+            "start_ms": 3000,
+            "end_ms": 5000,
+            "display_units": [
+                {"text": "第", "start_ms": 3400, "end_ms": 3800},
+                {"text": "二", "start_ms": 3800, "end_ms": 4200},
+                {"text": "句", "start_ms": 4200, "end_ms": 4500},
+            ],
+        },
+    ]
+    project = VideoProject(**{**project.__dict__, "alignment": {"lines": lines}})
+    renderer = FrameRenderer(
+        project,
+        VideoOptions(alignment_mode="model", lyric_highlight_mode="smooth", spectrum=False),
+    )
+
+    assert renderer._line_activation_start(0) == 1100
+    assert renderer._line_activation_start(1) == 3400
+    assert renderer._lyric_state(3300)["index"] == 0
+    assert renderer._lyric_state(3400)["index"] == 1
+
+
+def test_model_sweep_caps_continuous_line_extension_at_800ms(tmp_path):
+    project = make_project(tmp_path / "project")
+    lines = [
+        {
+            "source_index": 0,
+            "text": "第一句",
+            "start_ms": 1000,
+            "end_ms": 1500,
+            "display_units": [{"text": "第", "start_ms": 1100, "end_ms": 1400}],
+        },
+        {
+            "source_index": 1,
+            "text": "第二句",
+            "start_ms": 3000,
+            "end_ms": 7000,
+            "display_units": [{"text": "第", "start_ms": 5000, "end_ms": 5400}],
+        },
+    ]
+    project = VideoProject(**{**project.__dict__, "alignment": {"lines": lines}})
+    renderer = FrameRenderer(
+        project,
+        VideoOptions(alignment_mode="model", lyric_highlight_mode="smooth", spectrum=False),
+    )
+
+    assert renderer._line_activation_start(1) == 3800
+    assert renderer._lyric_state(3799)["index"] == 0
+    assert renderer._lyric_state(3800)["index"] == 1
+
+
+def test_model_sweep_keeps_initial_line_visible_before_actual_onset(tmp_path):
+    project = make_project(tmp_path / "project")
+    line = {
+        "source_index": 0,
+        "text": "第一句",
+        "start_ms": 1000,
+        "end_ms": 3000,
+        "display_units": [
+            {"text": "第", "start_ms": 1500, "end_ms": 1800},
+            {"text": "一", "start_ms": 1800, "end_ms": 2200},
+        ],
+    }
+    project = VideoProject(**{**project.__dict__, "alignment": {"lines": [line]}})
+    renderer = FrameRenderer(
+        project,
+        VideoOptions(alignment_mode="model", lyric_highlight_mode="smooth", spectrum=False),
+    )
+
+    state = renderer._lyric_state(1300)
+    assert state["kind"] == "active"
+    assert state["index"] == 0
+
+
+def test_model_sweep_keeps_interlude_cue_on_source_marker(tmp_path):
+    project = make_project(tmp_path / "project")
+    lines = [
+        {
+            "source_index": 0,
+            "text": "第一句",
+            "start_ms": 1000,
+            "end_ms": 21000,
+            "singing_end_ms": 8000,
+            "display_units": [{"text": "第", "start_ms": 1000, "end_ms": 1500}],
+        },
+        {
+            "source_index": 1,
+            "text": "第二句",
+            "start_ms": 21000,
+            "end_ms": 25000,
+            "display_units": [{"text": "第", "start_ms": 23000, "end_ms": 23500}],
+        },
+    ]
+    project = VideoProject(**{**project.__dict__, "alignment": {"lines": lines}})
+    renderer = FrameRenderer(
+        project,
+        VideoOptions(alignment_mode="model", lyric_highlight_mode="smooth", spectrum=False),
+    )
+
+    state = renderer._lyric_state(18000)
+    assert state == {"kind": "cue", "index": 1, "remaining": 3000}
+    assert renderer._lyric_state(21800)["index"] == 1
 
 
 def test_model_sweep_bridges_only_short_visible_character_gaps(monkeypatch, tmp_path):

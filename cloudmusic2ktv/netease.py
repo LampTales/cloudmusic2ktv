@@ -415,11 +415,20 @@ class NeteaseClient:
         row = rows[0]
         if not row.get("url"):
             reason = "当前账号没有取得完整音频地址"
-            if not self.account_status()["logged_in"]:
-                reason += "；请先登录后重试"
-            elif row.get("fee") == 1:
-                reason += "；请确认该账号的 VIP 权益有效"
-            raise NeteaseError(reason, code=row.get("code") or "audio_forbidden", detail=row)
+            if row.get("fee") == 1:
+                logged_in = bool(self.account_status().get("logged_in"))
+                if not logged_in:
+                    reason += "；请先登录后重试"
+                    error_code: int | str = "netease_auth_required"
+                else:
+                    reason += "；请确认该账号的 VIP 权益有效"
+                    error_code = "audio_vip_required"
+            else:
+                # Rows not explicitly marked as fee=1 retain the original
+                # auth/anonymous fallback behavior.  Avoid a status request
+                # here because it cannot improve that path.
+                error_code = row.get("code") or "audio_forbidden"
+            raise NeteaseError(reason, code=error_code, detail=row)
         return row
 
     def weapi(
