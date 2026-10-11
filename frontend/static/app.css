@@ -393,9 +393,15 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .auth-method-panel input { margin-top: 0; }
 .auth-method-panel > button.primary { width: 100%; margin-top: 2px; }
 .auth-method-panel > button.secondary { justify-self: start; }
-.auth-method-panel > div[id$="RegisterFields"], .auth-method-panel > div[id$="ReauthFields"] { display: grid; gap: 10px; }
-.auth-method-panel > div[id$="RegisterFields"] input, .auth-method-panel > div[id$="ReauthFields"] input { margin-top: 0; }
-.auth-method-panel > div[id$="RegisterFields"] > button.secondary, .auth-method-panel > div[id$="ReauthFields"] > button.secondary { justify-self: start; }
+.auth-method-panel > div[id$="RegisterFields"],
+.auth-method-panel > div[id$="ReauthFields"],
+.auth-method-panel > div[id$="SmsFields"] { display: grid; gap: 10px; }
+.auth-method-panel > div[id$="RegisterFields"] input,
+.auth-method-panel > div[id$="ReauthFields"] input,
+.auth-method-panel > div[id$="SmsFields"] input { margin-top: 0; }
+.auth-method-panel > div[id$="RegisterFields"] > button.secondary,
+.auth-method-panel > div[id$="ReauthFields"] > button.secondary,
+.auth-method-panel > div[id$="SmsFields"] > button.secondary { justify-self: start; }
 .auth-alternate-row { display: flex; justify-content: flex-start; margin-top: 6px; }
 .cookie-import-fields { display: grid; gap: 9px; margin-top: 14px; }
 .cookie-import-fields label { margin-top: 4px; }
@@ -419,6 +425,12 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .logged-in p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 .logged-in-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding-top: 13px; border-top: 1px solid var(--line); }
 .logged-in-actions .text-action { margin-right: auto; }
+#passwordResetFields, #accountSettingsFields { display: grid; gap: 10px; margin-top: 14px; }
+#passwordResetFields .helper-text, #accountSettingsFields .helper-text { margin: 0 0 2px; }
+#passwordResetFields > input, #accountSettingsFields > input { margin-top: 0; }
+#passwordResetFields > button.primary, #accountSettingsFields > button.primary { width: 100%; margin-top: 2px; }
+.account-current-username { margin: 0 0 2px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.account-current-username strong { color: var(--ink); font-weight: 800; }
 .admin-section { padding-top: 18px; }
 .admin-section + .admin-section { margin-top: 18px; border-top: 1px solid var(--line); }
 .admin-role-label { display: flex; align-items: center; gap: 9px; margin-top: 12px; color: var(--muted); font-size: 12px; }

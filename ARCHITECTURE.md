@@ -43,7 +43,7 @@
 
 ## 后端初始化与认证
 
-`app.py` 导入时创建各类 JSON/文件 store、`VideoJobManager` 和 `PlaylistCache`。认证装饰器分为 `member_required`（验证并续期）、`read_only_member_required`（只读验证，队列轮询使用）和 `admin_required`（root/admin）。允许名单按网易云 `userId` 判断，空名单首次注册自动创建 root。Cookie 是 HttpOnly、服务端存储。
+`app.py` 导入时创建各类 JSON/文件 store、`VideoJobManager` 和 `PlaylistCache`。认证装饰器分为 `member_required`（验证并续期）、`read_only_member_required`（只读验证，队列轮询使用）和 `admin_required`（root/admin）。允许名单按网易云 `userId` 判断，空名单首次注册自动创建 root。Cookie 是 HttpOnly、服务端存储。忘记密码和账号设置也必须先完成网易云身份验证；验证成功后只允许更新网站密码或用户名，重设密码会删除旧网站会话，账号设置会旋转当前会话并删除该用户的其他会话。
 
 `CLOUDMUSIC2KTV_TRUST_PROXY=1` 时只信任一层受控代理的 `X-Forwarded-*`；`CLOUDMUSIC2KTV_BASE_PATH` 同时影响 Cookie Path、artifact URL 和应用根路径。生产优先同源代理，跨域直连仅用于诊断。
 
@@ -56,7 +56,7 @@
 | 分组 | 典型接口 | 权限 |
 | --- | --- | --- |
 | 健康与状态 | `/healthz`、`/status` | healthz 公共 |
-| 网站认证 | `/auth/register`、`login`、`logout`、`csrf` | 按流程 |
+| 网站认证 | `/auth/register`、`login`、`logout`、`csrf`、`password-reset`、`account-settings` | 按流程；密码重设和账号设置先验证网易云 |
 | 网易云绑定 | 二维码、Cookie、身份确认、绑定状态 | 注册验证可匿名；重新验证和绑定状态需成员权限 |
 | 搜索与歌单 | `/search`、`/playlists`、`/playlists/<id>/tracks` | 成员 |
 | 素材 | `/song/inspect`、`/song/local`、`/song/download` | 成员 |

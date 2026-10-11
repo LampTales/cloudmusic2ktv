@@ -613,6 +613,74 @@ def test_website_login_uses_local_credentials_without_netease_login(monkeypatch,
     assert status.get_json()["profile"]["username"] == "alice"
 
 
+def test_password_reset_verifies_netease_then_invalidates_sessions(monkeypatch, tmp_path):
+    sessions = FileSessionStore(tmp_path / "sessions")
+    users = AllowlistStore(tmp_path / "allowlist.json")
+    accounts = WebsiteAccountStore(tmp_path / "accounts.json")
+    bindings = NeteaseBindingStore(tmp_path / "bindings.json")
+    users.authorize_login({"userId": 1, "nickname": "管理员"})
+    users.add({"userId": 2, "nickname": "用户"}, "user", added_by="1")
+    accounts.create("alice", "old-password", netease_user_id="2", nickname="用户")
+    bindings.save(
+        2,
+        {"userId": 2, "nickname": "用户"},
+        [{"name": "MUSIC_U", "value": "old-cookie", "domain": ".music.163.com", "path": "/"}],
+    )
+    monkeypatch.setattr(web_app, "auth_sessions", sessions)
+    monkeypatch.setattr(web_app, "allowlist", users)
+    monkeypatch.setattr(web_app, "website_accounts", accounts)
+    monkeypatch.setattr(web_app, "netease_bindings", bindings)
+    monkeypatch.setattr(
+        NeteaseClient,
+        "login_with_captcha",
+        lambda self, phone, captcha, country_code="86": (
+            self.session.cookies.set("MUSIC_U", "new-cookie", domain=".music.163.com", path="/"),
+            {"code": 200, "profile": {"userId": 2, "nickname": "用户", "avatarUrl": ""}},
+        )[1],
+    )
+    browser = web_app.app.test_client()
+    verified = browser.post(
+        "/api/auth/password-reset/verify",
+        json={"phone": "1", "captcha": "2"},
+    )
+    assert verified.status_code == 200
+    assert verified.get_json()["account"]["username"] == "alice"
+    assert bindings.load(2)["cookies"][0]["value"] == "new-cookie"
+    reset = browser.post("/api/auth/password-reset", json={"password": "new-password"})
+    assert reset.status_code == 200
+    assert accounts.authenticate("alice", "old-password") is None
+    assert accounts.authenticate("alice", "new-password") is not None
+    assert browser.get("/api/status").get_json()["logged_in"] is False
+
+
+def test_account_settings_requires_verification_and_updates_credentials(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2")
+    accounts = web_app.website_accounts
+    accounts.create("test-user", "old-password", netease_user_id="2", nickname="测试用户")
+    monkeypatch.setattr(
+        NeteaseClient,
+        "login_with_captcha",
+        lambda self, phone, captcha, country_code="86": {
+            "code": 200,
+            "profile": {"userId": 2, "nickname": "测试用户", "avatarUrl": ""},
+        },
+    )
+    verified = client.post(
+        "/api/auth/account-settings/verify",
+        json={"phone": "1", "captcha": "2"},
+    )
+    assert verified.status_code == 200
+    assert verified.get_json()["account"]["username"] == "test-user"
+    updated = client.patch(
+        "/api/auth/account-settings",
+        json={"username": "renamed", "password": "new-password"},
+    )
+    assert updated.status_code == 200
+    assert accounts.authenticate("test-user", "old-password") is None
+    assert accounts.authenticate("renamed", "new-password") is not None
+    assert client.get("/api/status").get_json()["profile"]["username"] == "renamed"
+
+
 def test_cookie_registration_verifies_account_before_binding(monkeypatch, tmp_path):
     sessions = FileSessionStore(tmp_path / "sessions")
     users = AllowlistStore(tmp_path / "allowlist.json")

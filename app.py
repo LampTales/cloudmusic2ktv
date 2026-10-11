@@ -59,6 +59,7 @@ PLAYLIST_CACHE_TTL_SECONDS = int(os.environ.get("CLOUDMUSIC2KTV_PLAYLIST_CACHE_T
 PLAYLIST_CACHE_MAX_ENTRIES = int(os.environ.get("CLOUDMUSIC2KTV_PLAYLIST_CACHE_MAX_ENTRIES", "32"))
 APPLICATION_LIMIT = int(os.environ.get("CLOUDMUSIC2KTV_APPLICATION_LIMIT", str(DEFAULT_APPLICATION_LIMIT)))
 IDENTITY_CONFIRMATION_TTL_SECONDS = 5 * 60
+ACCOUNT_VERIFICATION_TTL_SECONDS = 5 * 60
 MEDIA_SIGNING_KEY_FILE = INSTANCE / "media_signing.key"
 _media_signing_key_lock = threading.Lock()
 _media_signing_key_cache: bytes | None = None
@@ -347,16 +348,99 @@ def _identity_confirmation_required(session: Any, purpose: str) -> tuple[Any, in
     return response, status_code
 
 
+def _pending_account_profile(session: Any, field: str, purpose: str) -> dict[str, Any]:
+    pending = getattr(session, field, None) or {}
+    if int(pending.get("created_at") or 0) < int(time.time()) - ACCOUNT_VERIFICATION_TTL_SECONDS:
+        setattr(session, field, None)
+        raise AccountError("网易云验证已过期，请重新验证")
+    if pending.get("purpose") != purpose or pending.get("status") != "verified":
+        raise AccountError("请先完成网易云账号验证")
+    profile = public_profile(pending.get("profile"))
+    if not profile or profile.get("userId") is None:
+        setattr(session, field, None)
+        raise AccountError("网易云验证结果无效，请重新验证")
+    return profile
+
+
+def _finish_account_verification(session: Any, purpose: str, profile: dict[str, Any]) -> dict[str, Any]:
+    if allowlist.role_for(profile["userId"]) is None:
+        session.client.session.cookies.clear()
+        raise AccountError("该网易云账号已不在允许名单中")
+    account = website_accounts.by_netease_user(profile["userId"])
+    if not account:
+        session.client.session.cookies.clear()
+        raise AccountError("该网易云账号尚未绑定网站账号")
+    netease_bindings.save(profile["userId"], profile, session.client.export_cookies())
+    playlist_cache.invalidate_user(profile["userId"])
+    pending = {"purpose": purpose, "status": "verified", "created_at": int(time.time()), "profile": profile}
+    if purpose == "password_reset":
+        session.pending_password_reset = pending
+    else:
+        session.pending_account_settings = pending
+    session.client.session.cookies.clear()
+    session.pending_qr = None
+    session.pending_identity_confirmation = None
+    session.csrf_token = secrets.token_urlsafe(32)
+    return {"ok": True, "status": "verified", "profile": profile, "account": account}
+
+
+def _account_verification_submission(session: Any, body: dict[str, Any], purpose: str, expected_user_id: str | None = None) -> dict[str, Any]:
+    cookie_mode = "cookies" in body
+    qr_mode = bool(body.get("qr"))
+    identity_confirmation_mode = bool(body.get("identity_confirmation"))
+    phone = ""
+    captcha = ""
+    country_code = clean_country_code(body.get("country_code", "86"))
+    if not qr_mode and not cookie_mode and not identity_confirmation_mode:
+        phone = required_string(body, "phone")
+        captcha = required_string(body, "captcha")
+    session.discard_cookies_on_error = cookie_mode
+    if cookie_mode:
+        profile = _cookie_import_profile(session, body)
+    elif qr_mode:
+        pending = session.pending_qr or {}
+        if pending.get("purpose") != purpose or pending.get("status") != "verified":
+            raise AccountError("请先完成网易云扫码验证")
+        profile = public_profile(pending.get("profile") or {})
+    elif identity_confirmation_mode:
+        profile = _verified_identity_confirmation(session, purpose)
+    else:
+        try:
+            result = session.client.login_with_captcha(phone, captcha, country_code)
+        except NeteaseError as exc:
+            if exc.code == 8860:
+                response, status_code = _identity_confirmation_required(session, purpose)
+                raise _DeferredResponse(response, status_code)
+            raise
+        profile = public_profile(result.get("profile") or session.client.account_status().get("profile"))
+    if not profile or profile.get("userId") is None:
+        raise AccountError("网易云没有返回有效的用户身份")
+    if expected_user_id is not None and str(profile.get("userId")) != str(expected_user_id):
+        session.client.session.cookies.clear()
+        raise UserNotAllowed("只能验证当前网站账号绑定的网易云账号")
+    return _finish_account_verification(session, purpose, profile)
+
+
+class _DeferredResponse(Exception):
+    def __init__(self, response: Any, status_code: int):
+        self.response = response
+        self.status_code = status_code
+
+
 @app.post("/api/auth/qr/start")
 def start_qr_login() -> Any:
     """Start a current-web QR login challenge for registration or reauth."""
     body = json_body()
     with auth_sessions.open(auth_token(), create=True, touch=True) as session:
         assert session is not None
-        # A logged-in site account may use this endpoint for reauthentication;
-        # otherwise it is a pending registration verification.
-        purpose = "reauth" if session.profile else "register"
-        if purpose == "reauth":
+        requested_purpose = str(body.get("purpose") or "").strip()
+        allowed_public = {"register", "password_reset"}
+        allowed_member = {"reauth", "account_settings"}
+        if session.profile:
+            purpose = requested_purpose if requested_purpose in allowed_member else "reauth"
+        else:
+            purpose = requested_purpose if requested_purpose in allowed_public else "register"
+        if purpose in allowed_member:
             identity, failure = authorized_identity()
             if failure is not None:
                 return failure
@@ -397,11 +481,11 @@ def poll_qr_login() -> Any:
         or len(secure_captcha) > 8192
     ):
         return error_response("安全验证凭证无效，请重新验证", "invalid_captcha", 400)
-    # Registration is public, but a reauth challenge must still belong to an
+    # Registration and password recovery are public, but a member challenge must still belong to an
     # authorized member on every poll (access can be revoked after QR start).
     with auth_sessions.open(auth_token(), touch=False, persist=False) as existing:
         reauth = bool(existing and existing.pending_qr
-                      and existing.pending_qr.get("purpose") == "reauth")
+                      and existing.pending_qr.get("purpose") in {"reauth", "account_settings"})
     if reauth:
         _, failure = authorized_identity()
         if failure is not None:
@@ -452,7 +536,7 @@ def poll_qr_login() -> Any:
             return error_response("网易云没有返回有效的用户身份", "qr_profile_missing", 502)
         pending["status"] = "verified"
         pending["profile"] = profile
-        if pending.get("purpose") == "reauth" and session.profile:
+        if pending.get("purpose") in {"reauth", "account_settings"} and session.profile:
             identity = session.profile
             if str(profile.get("userId")) != str(identity.get("netease_user_id")):
                 session.client.session.cookies.clear()
@@ -465,11 +549,32 @@ def poll_qr_login() -> Any:
                 )
             netease_bindings.save(profile["userId"], profile, session.client.export_cookies())
             playlist_cache.invalidate_user(profile["userId"])
+            if pending.get("purpose") == "account_settings":
+                account = website_accounts.by_netease_user(profile["userId"])
+                if not account:
+                    session.client.session.cookies.clear()
+                    session.pending_qr = None
+                    return error_response("该网易云账号尚未绑定网站账号", "account_missing", 404)
+                session.pending_account_settings = {
+                    "purpose": "account_settings",
+                    "status": "verified",
+                    "created_at": int(time.time()),
+                    "profile": profile,
+                }
             session.client.session.cookies.clear()
             session.pending_qr = None
             session.pending_identity_confirmation = None
             session.csrf_token = secrets.token_urlsafe(32)
+            if pending.get("purpose") == "account_settings":
+                return jsonify({"ok": True, "status": "verified", "profile": profile, "account": account})
             return jsonify({"ok": True, "status": "verified", "profile": profile})
+        if pending.get("purpose") == "password_reset":
+            try:
+                result = _finish_account_verification(session, "password_reset", profile)
+            except (AccountError, UserNotAllowed) as exc:
+                session.pending_qr = None
+                return error_response(str(exc), "account_missing", 404)
+            return jsonify(result)
         return jsonify({"ok": True, "status": "verified", "profile": profile})
 
 
@@ -707,6 +812,93 @@ def reauthenticate_netease() -> Any:
         session.pending_identity_confirmation = None
         session.csrf_token = secrets.token_urlsafe(32)
     return jsonify({"ok": True, "message": "网易云账号已重新验证"})
+
+
+@app.post("/api/auth/password-reset/verify")
+def verify_password_reset() -> Any:
+    """Verify the NetEase identity before allowing a website password reset."""
+    body = json_body()
+    with auth_sessions.open(auth_token(), create=True, touch=True) as session:
+        assert session is not None
+        try:
+            result = _account_verification_submission(session, body, "password_reset")
+        except _DeferredResponse as deferred:
+            return deferred.response, deferred.status_code
+        response = jsonify(result)
+        set_auth_cookie(response, session.token)
+        return response
+
+
+@app.post("/api/auth/password-reset")
+def reset_password() -> Any:
+    body = json_body()
+    password = required_string(body, "password")
+    token = auth_token()
+    with auth_sessions.open(token, touch=True) as session:
+        if session is None:
+            return error_response("请先验证网易云账号", "verification_required", 401)
+        profile = _pending_account_profile(session, "pending_password_reset", "password_reset")
+        account = website_accounts.update_by_netease_user(profile["userId"], password=password)
+        session.pending_password_reset = None
+        user_id = str(profile["userId"])
+    auth_sessions.delete_by_netease_user(user_id)
+    response = jsonify({"ok": True, "message": "网站密码已重设", "account": account})
+    response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
+    return response
+
+
+@app.post("/api/auth/account-settings/verify")
+@member_required
+def verify_account_settings() -> Any:
+    body = json_body()
+    identity = g.current_user
+    with auth_sessions.open(auth_token(), touch=True) as session:
+        assert session is not None
+        try:
+            result = _account_verification_submission(
+                session,
+                body,
+                "account_settings",
+                expected_user_id=str(identity["netease_user_id"]),
+            )
+        except _DeferredResponse as deferred:
+            return deferred.response, deferred.status_code
+    return jsonify(result)
+
+
+@app.patch("/api/auth/account-settings")
+@member_required
+def update_account_settings() -> Any:
+    body = json_body()
+    identity = g.current_user
+    username = body.get("username")
+    password = body.get("password")
+    if username is not None and not isinstance(username, str):
+        return error_response("网站用户名格式不正确", "invalid_username", 400)
+    if password is not None and not isinstance(password, str):
+        return error_response("网站密码格式不正确", "invalid_password", 400)
+    token = auth_token()
+    with auth_sessions.open(token, touch=True) as session:
+        if session is None:
+            return error_response("请先登录网站账号", "login_required", 401)
+        profile = _pending_account_profile(session, "pending_account_settings", "account_settings")
+        if str(profile["userId"]) != str(identity["netease_user_id"]):
+            return error_response("网易云账号与当前网站账号不匹配", "not_allowed", 403)
+        account = website_accounts.update_by_netease_user(
+            profile["userId"], username=username, password=password
+        )
+        session.profile = {
+            **(session.profile or {}),
+            "username": account["username"],
+        }
+        session.pending_account_settings = None
+        user_id = str(profile["userId"])
+        current_token = session.token
+    auth_sessions.delete_by_netease_user(user_id, exclude_token=current_token)
+    replacement = auth_sessions.rotate(current_token)
+    response = jsonify({"ok": True, "message": "账号设置已更新", "account": account})
+    set_auth_cookie(response, replacement)
+    return response
 
 
 @app.get("/api/auth/netease-status")

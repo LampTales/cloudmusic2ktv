@@ -88,6 +88,54 @@ class WebsiteAccountStore:
                 return None
             return self.public(account)
 
+    def update_by_netease_user(
+        self,
+        user_id: Any,
+        *,
+        username: str | None = None,
+        password: str | None = None,
+    ) -> dict[str, Any]:
+        """Update the local credentials for an existing NetEase identity."""
+        normalized = self._normalize_id(user_id)
+        if normalized is None:
+            raise AccountError("网易云用户 ID 无效")
+        new_key = None
+        if username is not None:
+            stripped = username.strip()
+            if not USERNAME_PATTERN.fullmatch(stripped):
+                raise AccountError("网站用户名需要为 2～40 个不含空格的字符")
+            new_key = self._username_key(stripped)
+        if password is not None and len(password) < 6:
+            raise AccountError("网站密码至少需要 6 个字符")
+        if username is None and password is None:
+            raise AccountError("请至少修改用户名或密码")
+        with self._lock:
+            value = self._read()
+            old_key = None
+            account = None
+            for key, entry in value["users"].items():
+                if isinstance(entry, dict) and str(entry.get("netease_user_id")) == normalized:
+                    old_key = key
+                    account = entry
+                    break
+            if old_key is None or not isinstance(account, dict):
+                raise AccountError("该网易云账号尚未绑定网站账号")
+            if new_key is not None and new_key != old_key and new_key in value["users"]:
+                raise AccountExists("网站用户名已存在")
+            updated = dict(account)
+            if username is not None:
+                updated["username"] = username.strip()
+                updated["username_key"] = new_key
+            if password is not None:
+                updated["password_hash"] = hash_password(password)
+            if new_key is not None and new_key != old_key:
+                del value["users"][old_key]
+                value["users"][new_key] = updated
+            else:
+                value["users"][old_key] = updated
+            self._write(value)
+            return self.public(updated)
+
     def delete_by_netease_user(self, user_id: Any) -> None:
         normalized = self._normalize_id(user_id)
         with self._lock:
@@ -181,6 +229,7 @@ class NeteaseBindingStore:
         self._lock = threading.RLock()
 
     def save(self, user_id: Any, profile: dict[str, Any], cookies: list[dict[str, Any]]) -> None:
+        """Replace the complete server-side Cookie snapshot for this user."""
         normalized = str(user_id or "").strip()
         if not normalized.isdigit() or int(normalized) <= 0:
             raise AccountError("网易云用户 ID 无效")
