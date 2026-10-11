@@ -27,6 +27,8 @@ class AuthSession:
     profile: dict[str, Any] | None
     pending_qr: dict[str, Any] | None = None
     pending_identity_confirmation: dict[str, Any] | None = None
+    pending_password_reset: dict[str, Any] | None = None
+    pending_account_settings: dict[str, Any] | None = None
     csrf_token: str = ""
     discard_cookies_on_error: bool = False
 
@@ -81,6 +83,8 @@ class FileSessionStore:
                 "profile": None,
                 "pending_qr": None,
                 "pending_identity_confirmation": None,
+                "pending_password_reset": None,
+                "pending_account_settings": None,
                 "csrf_token": secrets.token_urlsafe(32),
                 "cookies": [],
             }
@@ -105,6 +109,16 @@ class FileSessionStore:
                     if isinstance(record.get("pending_identity_confirmation"), dict)
                     else None
                 ),
+                pending_password_reset=(
+                    record.get("pending_password_reset")
+                    if isinstance(record.get("pending_password_reset"), dict)
+                    else None
+                ),
+                pending_account_settings=(
+                    record.get("pending_account_settings")
+                    if isinstance(record.get("pending_account_settings"), dict)
+                    else None
+                ),
                 csrf_token=str(record.get("csrf_token") or secrets.token_urlsafe(32)),
             )
             try:
@@ -127,6 +141,8 @@ class FileSessionStore:
                             "profile": session.profile,
                             "pending_qr": session.pending_qr,
                             "pending_identity_confirmation": session.pending_identity_confirmation,
+                            "pending_password_reset": session.pending_password_reset,
+                            "pending_account_settings": session.pending_account_settings,
                             "csrf_token": session.csrf_token,
                             "cookies": client.export_cookies(),
                         },
@@ -177,7 +193,7 @@ class FileSessionStore:
                         pass
         return removed
 
-    def delete_by_netease_user(self, user_id: Any) -> int:
+    def delete_by_netease_user(self, user_id: Any, *, exclude_token: str | None = None) -> int:
         """Remove the user's site sessions and verified pending identities."""
         target = str(user_id or "").strip()
         if not target.isdigit() or int(target) <= 0:
@@ -197,7 +213,14 @@ class FileSessionStore:
                 if not isinstance(record, dict):
                     continue
                 identities = [record.get("profile")]
-                for field in ("pending_qr", "pending_identity_confirmation"):
+                if exclude_token and path == self._path(exclude_token):
+                    continue
+                for field in (
+                    "pending_qr",
+                    "pending_identity_confirmation",
+                    "pending_password_reset",
+                    "pending_account_settings",
+                ):
                     pending = record.get(field)
                     if isinstance(pending, dict):
                         identities.append(pending.get("profile"))

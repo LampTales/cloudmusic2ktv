@@ -356,7 +356,7 @@
   <div id="accountModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
     <div class="modal-panel account-modal-panel">
       <div class="modal-heading">
-        <div><p class="eyebrow">WEBSITE ACCOUNT</p><h2 id="accountModalTitle">网站账号</h2></div>
+        <div><p id="accountModalEyebrow" class="eyebrow">WEBSITE ACCOUNT</p><h2 id="accountModalTitle">网站账号</h2></div>
         <button id="closeAccountModal" class="text-action modal-close" type="button" aria-label="关闭账号窗口">关闭</button>
       </div>
       <div id="loggedOut" class="account-form">
@@ -371,6 +371,7 @@
           <label for="websitePassword">网站密码</label>
           <input id="websitePassword" name="password" type="password" placeholder="密码" autocomplete="section-login current-password" required>
           <button id="login" class="primary" type="submit">登录网站</button>
+          <div class="auth-alternate-row"><a id="forgotPassword" class="text-action alternate-login-link" href="#">忘记密码？</a></div>
         </form>
         <form id="websiteRegisterForm" class="hidden" autocomplete="on">
           <p class="modal-lede">新建用户需要先验证一个在允许名单中的网易云账号，绑定后暂不支持换绑。</p>
@@ -418,22 +419,42 @@
         </div>
         <div class="logged-in-actions">
           <button id="checkNeteaseCookie" class="text-action" type="button">检查网易云状态</button>
-          <button id="manageAllowlist" class="secondary compact hidden" type="button">管理</button>
+          <button id="accountSettings" class="secondary compact" type="button">设置</button>
           <button id="reauthNetease" class="secondary compact" type="button">重新验证</button>
+          <button id="manageAllowlist" class="secondary compact hidden" type="button">管理</button>
           <button id="logout" class="secondary compact" type="button">退出登录</button>
         </div>
       </div>
-      <div id="neteaseReauthForm" class="account-form hidden">
-        <p class="modal-lede">网易云绑定已失效。请验证原来绑定的网易云账号；验证其他账号不会改变当前绑定。</p>
-        <div id="cookieReauthFields" class="cookie-import-fields hidden">
-          <p class="helper-text">上传或粘贴原绑定账号的 Cookie JSON。验证其他账号会被拒绝，不会换绑。</p>
-          <label for="reauthCookieFile">Cookie JSON 文件</label>
-          <input id="reauthCookieFile" type="file" accept="application/json,.json">
-          <label for="reauthCookieText">或粘贴 Cookie JSON</label>
-          <textarea id="reauthCookieText" rows="5" placeholder="粘贴 cookie.json 的 JSON 内容"></textarea>
-          <p class="helper-text security-hint">Cookie 只用于一次验证；请通过 HTTPS 使用此功能。</p>
+      <div id="passwordResetForm" class="account-form hidden">
+        <div id="passwordResetVerifyFields" class="auth-method-panel">
+          <div id="passwordResetSmsFields">
+            <label>国家/地区代码</label>
+            <div class="phone-row"><input id="passwordResetCountryCode" value="86" inputmode="numeric" aria-label="国家地区代码"><input id="passwordResetPhone" placeholder="网易云手机号" inputmode="tel" autocomplete="tel"></div>
+            <button id="sendPasswordResetCaptcha" class="secondary" type="button">获取验证码</button>
+            <label for="passwordResetCaptcha">短信验证码</label>
+            <input id="passwordResetCaptcha" placeholder="请输入验证码" inputmode="numeric" autocomplete="one-time-code">
+          </div>
+          <button id="startQrPasswordReset" class="text-action method-switch-link" type="button">改用二维码登录</button>
+          <div id="qrPasswordResetPanel" class="qr-login-panel hidden"><img id="qrPasswordResetImage" alt="网易云扫码验证二维码"><p id="qrPasswordResetStatus" class="helper-text">请使用网易云音乐 App 扫描二维码。</p><a id="qrPasswordResetLink" class="text-action" target="_blank" rel="noopener">打开网易云扫码页面</a><button id="refreshQrPasswordReset" class="text-action" type="button">刷新二维码</button><button id="switchSmsPasswordReset" class="text-action" type="button">改用短信验证码</button></div>
+          <div class="cookie-import-fields hidden" id="passwordResetCookieFields"><label for="passwordResetCookieFile">Cookie JSON 文件</label><input id="passwordResetCookieFile" type="file" accept="application/json,.json"><label for="passwordResetCookieText">或粘贴 Cookie JSON</label><textarea id="passwordResetCookieText" rows="4" placeholder="粘贴 cookie.json 的 JSON 内容"></textarea></div>
         </div>
-        <button id="reauthCookieSubmit" class="primary" type="button">导入 Cookie 并重新验证</button>
+        <button id="passwordResetVerify" class="primary" type="button">验证网易云账号</button>
+        <div class="auth-alternate-row"><a id="showPasswordResetCookie" class="text-action alternate-login-link" href="#">使用 Cookie 导入</a></div>
+        <div id="passwordResetFields" class="hidden"><p class="account-current-username">当前绑定的网站用户名：<strong id="passwordResetUsername"></strong></p><label for="passwordResetNewPassword">新网站密码</label><input id="passwordResetNewPassword" type="password" placeholder="6～256 个字符" autocomplete="new-password"><button id="passwordResetSubmit" class="primary" type="button">重设密码</button></div>
+      </div>
+      <div id="accountSettingsForm" class="account-form hidden">
+        <p class="modal-lede">重设用户名或密码需要先验证网易云账号。</p>
+        <div id="accountSettingsVerifyFields" class="auth-method-panel">
+          <div id="accountSettingsSmsFields"><label>国家/地区代码</label><div class="phone-row"><input id="accountSettingsCountryCode" value="86" inputmode="numeric" aria-label="国家地区代码"><input id="accountSettingsPhone" placeholder="网易云手机号" inputmode="tel" autocomplete="tel"></div><button id="sendAccountSettingsCaptcha" class="secondary" type="button">获取验证码</button><label for="accountSettingsCaptcha">短信验证码</label><input id="accountSettingsCaptcha" placeholder="请输入验证码" inputmode="numeric" autocomplete="one-time-code"></div>
+          <button id="startQrAccountSettings" class="text-action method-switch-link" type="button">改用二维码登录</button>
+          <div id="qrAccountSettingsPanel" class="qr-login-panel hidden"><img id="qrAccountSettingsImage" alt="网易云扫码验证二维码"><p id="qrAccountSettingsStatus" class="helper-text">请使用网易云音乐 App 扫描二维码。</p><a id="qrAccountSettingsLink" class="text-action" target="_blank" rel="noopener">打开网易云扫码页面</a><button id="refreshQrAccountSettings" class="text-action" type="button">刷新二维码</button><button id="switchSmsAccountSettings" class="text-action" type="button">改用短信验证码</button></div>
+          <div class="cookie-import-fields hidden" id="accountSettingsCookieFields"><label for="accountSettingsCookieFile">Cookie JSON 文件</label><input id="accountSettingsCookieFile" type="file" accept="application/json,.json"><label for="accountSettingsCookieText">或粘贴 Cookie JSON</label><textarea id="accountSettingsCookieText" rows="4" placeholder="粘贴 cookie.json 的 JSON 内容"></textarea></div>
+        </div>
+        <button id="accountSettingsVerify" class="primary" type="button">验证网易云账号</button>
+        <div class="auth-alternate-row"><a id="showAccountSettingsCookie" class="text-action alternate-login-link" href="#">使用 Cookie 导入</a></div>
+        <div id="accountSettingsFields" class="hidden"><p class="account-current-username">当前网站用户名：<strong id="accountSettingsUsername"></strong></p><label for="accountSettingsNewUsername">新网站用户名（可选）</label><input id="accountSettingsNewUsername" type="text" placeholder="2～40 个不含空格的字符" autocomplete="username"><label for="accountSettingsNewPassword">新网站密码（可选）</label><input id="accountSettingsNewPassword" type="password" placeholder="6～256 个字符" autocomplete="new-password"><button id="accountSettingsSubmit" class="primary" type="button">保存账号设置</button></div>
+      </div>
+      <div id="neteaseReauthForm" class="account-form hidden">
         <div id="legacyReauthMethods" class="auth-method-panel">
           <div id="smsReauthFields">
             <label>国家/地区代码</label>
@@ -444,7 +465,6 @@
             <button id="sendReauthCaptcha" class="secondary" type="button">获取验证码</button>
             <label for="reauthCaptcha">短信验证码</label>
             <input id="reauthCaptcha" placeholder="请输入验证码" inputmode="numeric" autocomplete="one-time-code">
-            <button id="reauthNeteaseSubmit" class="primary" type="button">重新验证网易云</button>
           </div>
           <button id="startQrReauth" class="text-action method-switch-link" type="button">改用二维码登录</button>
           <div id="qrReauthPanel" class="qr-login-panel hidden">
@@ -455,7 +475,17 @@
             <button id="switchSmsReauth" class="text-action" type="button">改用短信验证码</button>
           </div>
         </div>
+        <button id="reauthNeteaseSubmit" class="primary" type="button">重新验证网易云</button>
         <div class="auth-alternate-row"><a id="showLegacyReauth" class="text-action alternate-login-link" href="#">使用 Cookie 导入</a></div>
+        <div id="cookieReauthFields" class="cookie-import-fields hidden">
+          <p class="helper-text">上传或粘贴原绑定账号的 Cookie JSON。验证其他账号会被拒绝，不会换绑。</p>
+          <label for="reauthCookieFile">Cookie JSON 文件</label>
+          <input id="reauthCookieFile" type="file" accept="application/json,.json">
+          <label for="reauthCookieText">或粘贴 Cookie JSON</label>
+          <textarea id="reauthCookieText" rows="5" placeholder="粘贴 cookie.json 的 JSON 内容"></textarea>
+          <p class="helper-text security-hint">Cookie 只用于一次验证；请通过 HTTPS 使用此功能。</p>
+        </div>
+        <button id="reauthCookieSubmit" class="primary hidden" type="button">导入 Cookie 并重新验证</button>
       </div>
     </div>
   </div>

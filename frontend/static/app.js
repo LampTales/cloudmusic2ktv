@@ -35,6 +35,8 @@ let cancelQrVerification = null;
 let adminEditUser = null;
 let pendingIdentityConfirmationPurpose = null;
 let verifiedIdentityConfirmationPurpose = null;
+let passwordResetVerified = false;
+let accountSettingsVerified = false;
 let playlistsCache = [];
 let playlistAccountKey = null;
 let playlistListRequest = 0;
@@ -778,6 +780,9 @@ function setFinderMode(mode) {
 
 function openAccountModal() {
   closeNeteaseReauth();
+  setAccountModalHeading("WEBSITE ACCOUNT", "网站账号");
+  $("#passwordResetForm").classList.add("hidden");
+  $("#accountSettingsForm").classList.add("hidden");
   $("#loggedOut").classList.toggle("hidden", accountLoggedIn);
   $("#loggedIn").classList.toggle("hidden", !accountLoggedIn);
   $("#accountModal").classList.remove("hidden");
@@ -788,11 +793,28 @@ function openAccountModal() {
 function closeAccountModal() {
   stopQrPolling();
   closeNeteaseReauth();
+  $("#passwordResetForm").classList.add("hidden");
+  $("#accountSettingsForm").classList.add("hidden");
   clearCookieInput("#registerCookieFile", "#registerCookieText");
   clearCookieInput("#reauthCookieFile", "#reauthCookieText");
+  clearCookieInput("#passwordResetCookieFile", "#passwordResetCookieText");
+  clearCookieInput("#accountSettingsCookieFile", "#accountSettingsCookieText");
+  setAccountModalHeading("WEBSITE ACCOUNT", "网站账号");
   $("#accountModal").classList.add("hidden");
   document.body.classList.remove("modal-open");
   $("#accountPill").focus();
+}
+
+function setAccountModalHeading(eyebrow, title) {
+  $("#accountModalEyebrow").textContent = eyebrow;
+  $("#accountModalTitle").textContent = title;
+}
+
+function closeAccountView() {
+  if (!$("#passwordResetForm").classList.contains("hidden")) return closePasswordReset();
+  if (!$("#accountSettingsForm").classList.contains("hidden")) return closeAccountSettings();
+  if (!$("#neteaseReauthForm").classList.contains("hidden")) return closeNeteaseReauth();
+  closeAccountModal();
 }
 
 function openIdentityConfirmation(purpose) {
@@ -832,6 +854,8 @@ async function confirmIdentityConfirmation(button) {
     closeIdentityConfirmation();
     if (purpose === "register") await submitWebsiteRegistration();
     else if (purpose === "reauth") await submitNeteaseReauthentication();
+    else if (purpose === "password_reset") await submitAccountVerification("passwordReset");
+    else if (purpose === "account_settings") await submitAccountVerification("accountSettings");
   } catch (error) {
     notify(error.message, true);
   } finally {
@@ -867,7 +891,7 @@ function stopQrPolling() {
   if (qrExpireTimer) { clearTimeout(qrExpireTimer); qrExpireTimer = null; }
 }
 
-async function startQrFlow({image, status, link, button, onVerified}) {
+async function startQrFlow({image, status, link, button, onVerified, purpose = ""}) {
   stopQrPolling();
   const flowId = qrFlowId;
   busy(button, true, "获取中…");
@@ -876,7 +900,7 @@ async function startQrFlow({image, status, link, button, onVerified}) {
     if (flowId !== qrFlowId) return;
     const data = await api("/api/auth/qr/start", {
       method: "POST",
-      body: JSON.stringify({browser_user_agent: navigator.userAgent, yd_device_token: initialToken}),
+      body: JSON.stringify({browser_user_agent: navigator.userAgent, yd_device_token: initialToken, ...(purpose ? {purpose} : {})}),
     });
     if (flowId !== qrFlowId) return;
     image.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(data.qr_url)}`;
@@ -940,6 +964,7 @@ async function startQrFlow({image, status, link, button, onVerified}) {
 function openNeteaseReauth() {
   if (!accountLoggedIn) return openAccountModal();
   $("#accountModal").classList.remove("hidden");
+  setAccountModalHeading("REAUTHENTICATE", "重新验证");
   $("#neteaseReauthForm").classList.remove("hidden");
   $("#cookieReauthFields").classList.add("hidden");
   $("#reauthCookieSubmit").classList.add("hidden");
@@ -947,6 +972,7 @@ function openNeteaseReauth() {
   $("#smsReauthFields").classList.remove("hidden");
   $("#startQrReauth").classList.remove("hidden");
   $("#qrReauthPanel").classList.add("hidden");
+  $("#reauthNeteaseSubmit").classList.remove("hidden");
   $("#showLegacyReauth").textContent = "使用 Cookie 导入";
   $("#loggedIn").classList.add("hidden");
   $("#loggedOut").classList.add("hidden");
@@ -956,8 +982,154 @@ function openNeteaseReauth() {
 
 function closeNeteaseReauth() {
   stopQrPolling();
+  clearCookieInput("#reauthCookieFile", "#reauthCookieText");
   $("#neteaseReauthForm").classList.add("hidden");
+  setAccountModalHeading("WEBSITE ACCOUNT", "网站账号");
   if (accountLoggedIn) $("#loggedIn").classList.remove("hidden");
+}
+
+function resetAccountVerificationUi(kind) {
+  const reset = kind === "passwordReset";
+  const prefix = reset ? "passwordReset" : "accountSettings";
+  $(`#${prefix}VerifyFields`).classList.remove("hidden");
+  $(`#${prefix}Verify`).classList.remove("hidden");
+  $(`#${prefix}Fields`).classList.add("hidden");
+  $(`#${prefix}SmsFields`).classList.remove("hidden");
+  $(`#startQr${reset ? "PasswordReset" : "AccountSettings"}`).classList.remove("hidden");
+  $(`#qr${reset ? "PasswordReset" : "AccountSettings"}Panel`).classList.add("hidden");
+  $(`#${prefix}CookieFields`).classList.add("hidden");
+  const cookieLink = $(`#show${reset ? "PasswordReset" : "AccountSettings"}Cookie`);
+  cookieLink.classList.remove("hidden");
+  cookieLink.textContent = "使用 Cookie 导入";
+  if (reset) passwordResetVerified = false;
+  else accountSettingsVerified = false;
+}
+
+function openPasswordReset() {
+  stopQrPolling();
+  $("#loggedOut").classList.add("hidden");
+  $("#loggedIn").classList.add("hidden");
+  $("#neteaseReauthForm").classList.add("hidden");
+  $("#accountSettingsForm").classList.add("hidden");
+  setAccountModalHeading("PASSWORD RESET", "重设密码");
+  $("#passwordResetForm").classList.remove("hidden");
+  resetAccountVerificationUi("passwordReset");
+  $("#passwordResetPhone").focus();
+}
+
+function closePasswordReset() {
+  stopQrPolling();
+  clearCookieInput("#passwordResetCookieFile", "#passwordResetCookieText");
+  $("#passwordResetNewPassword").value = "";
+  $("#passwordResetForm").classList.add("hidden");
+  setAccountModalHeading("WEBSITE ACCOUNT", "网站账号");
+  if (accountLoggedIn) $("#loggedIn").classList.remove("hidden");
+  else $("#loggedOut").classList.remove("hidden");
+}
+
+function openAccountSettings() {
+  if (!accountLoggedIn) return openAccountModal();
+  stopQrPolling();
+  $("#loggedOut").classList.add("hidden");
+  $("#loggedIn").classList.add("hidden");
+  $("#neteaseReauthForm").classList.add("hidden");
+  $("#passwordResetForm").classList.add("hidden");
+  setAccountModalHeading("ACCOUNT SETTINGS", "账号设置");
+  $("#accountSettingsForm").classList.remove("hidden");
+  resetAccountVerificationUi("accountSettings");
+  $("#accountSettingsPhone").focus();
+}
+
+function closeAccountSettings() {
+  stopQrPolling();
+  clearCookieInput("#accountSettingsCookieFile", "#accountSettingsCookieText");
+  $("#accountSettingsNewUsername").value = "";
+  $("#accountSettingsNewPassword").value = "";
+  $("#accountSettingsForm").classList.add("hidden");
+  setAccountModalHeading("WEBSITE ACCOUNT", "网站账号");
+  if (accountLoggedIn) $("#loggedIn").classList.remove("hidden");
+}
+
+function showVerifiedAccountOperation(kind, result) {
+  const reset = kind === "passwordReset";
+  const prefix = reset ? "passwordReset" : "accountSettings";
+  $(`#${prefix}VerifyFields`).classList.add("hidden");
+  $(`#${prefix}Verify`).classList.add("hidden");
+  $(`#show${reset ? "PasswordReset" : "AccountSettings"}Cookie`).classList.add("hidden");
+  $(`#${prefix}Fields`).classList.remove("hidden");
+  $(`#${prefix}Username`).textContent = result.account?.username || "（未知）";
+  if (reset) passwordResetVerified = true;
+  else accountSettingsVerified = true;
+  notify(`网易云账号验证成功，当前绑定用户名：${result.account?.username || "（未知）"}`);
+}
+
+async function submitAccountVerification(kind) {
+  const reset = kind === "passwordReset";
+  const prefix = reset ? "passwordReset" : "accountSettings";
+  const purpose = reset ? "password_reset" : "account_settings";
+  const button = $(`#${prefix}Verify`);
+  busy(button, true, "验证中…");
+  let cookieSubmitted = false;
+  try {
+    const cookieVisible = !$(`#${prefix}CookieFields`).classList.contains("hidden");
+    const payload = {};
+    if (verifiedIdentityConfirmationPurpose === purpose) {
+      payload.identity_confirmation = true;
+    } else if (cookieVisible) {
+      payload.cookies = await readCookieInput(`#${prefix}CookieFile`, `#${prefix}CookieText`);
+      payload.csrf_token = await ensureCookieCsrf();
+      cookieSubmitted = true;
+    } else {
+      payload.phone = $(`#${prefix}Phone`).value;
+      payload.captcha = $(`#${prefix}Captcha`).value;
+      payload.country_code = $(`#${prefix}CountryCode`).value;
+    }
+    const result = await api(`/api/auth/${reset ? "password-reset/verify" : "account-settings/verify"}`, {
+      method: "POST", body: JSON.stringify(payload),
+    });
+    verifiedIdentityConfirmationPurpose = null;
+    showVerifiedAccountOperation(kind, result);
+  } catch (error) {
+    if (error.code === "netease_identity_confirmation_required") openIdentityConfirmation(purpose);
+    else notify(error.message, true);
+  } finally {
+    if (cookieSubmitted) clearCookieInput(`#${prefix}CookieFile`, `#${prefix}CookieText`);
+    busy(button, false);
+  }
+}
+
+async function submitPasswordReset() {
+  if (!passwordResetVerified) return;
+  const button = $("#passwordResetSubmit");
+  busy(button, true, "保存中…");
+  try {
+    await api("/api/auth/password-reset", {
+      method: "POST", body: JSON.stringify({password: $("#passwordResetNewPassword").value}),
+    });
+    notify("密码已重设，请使用新密码登录");
+    closePasswordReset();
+    setWebsiteAuthMode("login");
+    await refreshStatus();
+  } catch (error) { notify(error.message, true); }
+  finally { busy(button, false); }
+}
+
+async function submitAccountSettings() {
+  if (!accountSettingsVerified) return;
+  const username = $("#accountSettingsNewUsername").value;
+  const password = $("#accountSettingsNewPassword").value;
+  if (!username.trim() && !password) return notify("请至少修改用户名或密码", true);
+  const button = $("#accountSettingsSubmit");
+  busy(button, true, "保存中…");
+  try {
+    await api("/api/auth/account-settings", {
+      method: "PATCH", body: JSON.stringify({username: username.trim() || undefined, password: password || undefined}),
+    });
+    notify("账号设置已更新，请重新登录");
+    closeAccountSettings();
+    await refreshStatus();
+  } catch (error) { notify(error.message, true); }
+  finally { busy(button, false); }
 }
 
 async function checkNeteaseCookieStatus(button) {
@@ -1382,14 +1554,60 @@ function setupSectionNavigation() {
 $("#searchModeSearch").addEventListener("click", () => setFinderMode("search"));
 $("#searchModeId").addEventListener("click", () => setFinderMode("id"));
 $("#accountPill").addEventListener("click", openAccountModal);
-$("#closeAccountModal").addEventListener("click", closeAccountModal);
-$("#accountModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeAccountModal(); });
+$("#closeAccountModal").addEventListener("click", closeAccountView);
+$("#accountModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeAccountView(); });
 $("#cancelIdentityConfirmation").addEventListener("click", cancelIdentityConfirmation);
 $("#confirmIdentityConfirmation").addEventListener("click", event => confirmIdentityConfirmation(event.currentTarget));
 $("#identityConfirmationModal").addEventListener("click", event => {
   if (event.target === event.currentTarget) cancelIdentityConfirmation();
 });
 $("#manageAllowlist").addEventListener("click", openAdminModal);
+$("#accountSettings").addEventListener("click", openAccountSettings);
+$("#forgotPassword").addEventListener("click", event => { event.preventDefault(); openPasswordReset(); });
+$("#passwordResetVerify").addEventListener("click", () => submitAccountVerification("passwordReset"));
+$("#passwordResetSubmit").addEventListener("click", submitPasswordReset);
+$("#accountSettingsVerify").addEventListener("click", () => submitAccountVerification("accountSettings"));
+$("#accountSettingsSubmit").addEventListener("click", submitAccountSettings);
+$("#showPasswordResetCookie").addEventListener("click", event => {
+  event.preventDefault();
+  const showCookie = $("#passwordResetCookieFields").classList.contains("hidden");
+  $("#passwordResetCookieFields").classList.toggle("hidden", !showCookie);
+  $("#passwordResetSmsFields").classList.toggle("hidden");
+  $("#startQrPasswordReset").classList.toggle("hidden");
+  $("#showPasswordResetCookie").textContent = showCookie ? "使用验证码/二维码" : "使用 Cookie 导入";
+});
+$("#showAccountSettingsCookie").addEventListener("click", event => {
+  event.preventDefault();
+  const showCookie = $("#accountSettingsCookieFields").classList.contains("hidden");
+  $("#accountSettingsCookieFields").classList.toggle("hidden", !showCookie);
+  $("#accountSettingsSmsFields").classList.toggle("hidden");
+  $("#startQrAccountSettings").classList.toggle("hidden");
+  $("#showAccountSettingsCookie").textContent = showCookie ? "使用验证码/二维码" : "使用 Cookie 导入";
+});
+$("#sendPasswordResetCaptcha").addEventListener("click", async event => {
+  const button = event.currentTarget; busy(button, true, "发送中…");
+  try { await api("/api/auth/captcha", {method: "POST", body: JSON.stringify({phone: $("#passwordResetPhone").value, country_code: $("#passwordResetCountryCode").value})}); notify("验证码已发送，请查看短信"); }
+  catch (error) { notify(error.message, true); }
+  finally { busy(button, false); }
+});
+$("#sendAccountSettingsCaptcha").addEventListener("click", async event => {
+  const button = event.currentTarget; busy(button, true, "发送中…");
+  try { await api("/api/auth/captcha", {method: "POST", body: JSON.stringify({phone: $("#accountSettingsPhone").value, country_code: $("#accountSettingsCountryCode").value})}); notify("验证码已发送，请查看短信"); }
+  catch (error) { notify(error.message, true); }
+  finally { busy(button, false); }
+});
+$("#startQrPasswordReset").addEventListener("click", async event => {
+  $("#passwordResetSmsFields").classList.add("hidden"); $("#startQrPasswordReset").classList.add("hidden"); $("#qrPasswordResetPanel").classList.remove("hidden");
+  await startQrFlow({purpose: "password_reset", image: $("#qrPasswordResetImage"), status: $("#qrPasswordResetStatus"), link: $("#qrPasswordResetLink"), button: event.currentTarget, onVerified: result => showVerifiedAccountOperation("passwordReset", result)});
+});
+$("#refreshQrPasswordReset").addEventListener("click", () => $("#startQrPasswordReset").click());
+$("#switchSmsPasswordReset").addEventListener("click", () => { stopQrPolling(); resetAccountVerificationUi("passwordReset"); $("#passwordResetPhone").focus(); });
+$("#startQrAccountSettings").addEventListener("click", async event => {
+  $("#accountSettingsSmsFields").classList.add("hidden"); $("#startQrAccountSettings").classList.add("hidden"); $("#qrAccountSettingsPanel").classList.remove("hidden");
+  await startQrFlow({purpose: "account_settings", image: $("#qrAccountSettingsImage"), status: $("#qrAccountSettingsStatus"), link: $("#qrAccountSettingsLink"), button: event.currentTarget, onVerified: result => showVerifiedAccountOperation("accountSettings", result)});
+});
+$("#refreshQrAccountSettings").addEventListener("click", () => $("#startQrAccountSettings").click());
+$("#switchSmsAccountSettings").addEventListener("click", () => { stopQrPolling(); resetAccountVerificationUi("accountSettings"); $("#accountSettingsPhone").focus(); });
 $("#closeAdminModal").addEventListener("click", closeAdminModal);
 $("#adminModal").addEventListener("click", event => { if (event.target === event.currentTarget) closeAdminModal(); });
 $("#closeAdminEditModal").addEventListener("click", closeAdminEditModal);
@@ -1557,6 +1775,7 @@ $("#showLegacyReauth").addEventListener("click", (event) => {
   const showCookie = $("#cookieReauthFields").classList.contains("hidden");
   stopQrPolling();
   $("#legacyReauthMethods").classList.toggle("hidden", showCookie);
+  $("#reauthNeteaseSubmit").classList.toggle("hidden", showCookie);
   $("#cookieReauthFields").classList.toggle("hidden", !showCookie);
   $("#reauthCookieSubmit").classList.toggle("hidden", !showCookie);
   $("#showLegacyReauth").textContent = showCookie ? "使用验证码/二维码" : "使用 Cookie 导入";
@@ -2212,7 +2431,7 @@ document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !$("#identityConfirmationModal").classList.contains("hidden")) cancelIdentityConfirmation();
   else if (event.key === "Escape" && !$("#queueModal").classList.contains("hidden")) closeQueueModal();
   else if (event.key === "Escape" && !$("#adminModal").classList.contains("hidden")) closeAdminModal();
-  else if (event.key === "Escape" && !$("#accountModal").classList.contains("hidden")) closeAccountModal();
+  else if (event.key === "Escape" && !$("#accountModal").classList.contains("hidden")) closeAccountView();
 });
 
 updateConditionalOptions();
