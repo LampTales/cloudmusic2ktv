@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 
@@ -651,6 +652,37 @@ def test_password_reset_verifies_netease_then_invalidates_sessions(monkeypatch, 
     assert accounts.authenticate("alice", "old-password") is None
     assert accounts.authenticate("alice", "new-password") is not None
     assert browser.get("/api/status").get_json()["logged_in"] is False
+
+
+def test_website_login_cannot_inherit_pending_password_reset(monkeypatch, tmp_path):
+    sessions = FileSessionStore(tmp_path / "sessions")
+    users = AllowlistStore(tmp_path / "allowlist.json")
+    accounts = WebsiteAccountStore(tmp_path / "accounts.json")
+    users.authorize_login({"userId": 2, "nickname": "用户"})
+    accounts.create("alice", "old-password", netease_user_id="2", nickname="用户")
+    monkeypatch.setattr(web_app, "auth_sessions", sessions)
+    monkeypatch.setattr(web_app, "allowlist", users)
+    monkeypatch.setattr(web_app, "website_accounts", accounts)
+
+    browser = web_app.app.test_client()
+    with sessions.open(None, create=True) as session:
+        token = session.token
+        session.pending_password_reset = {
+            "purpose": "password_reset",
+            "status": "verified",
+            "created_at": int(time.time()),
+            "profile": {"userId": 2, "nickname": "用户", "avatarUrl": ""},
+        }
+    set_session_cookie(browser, token)
+
+    logged_in = browser.post(
+        "/api/auth/login", json={"username": "alice", "password": "old-password"}
+    )
+    assert logged_in.status_code == 200
+    reset = browser.post("/api/auth/password-reset", json={"password": "attacker-password"})
+    assert reset.status_code == 400
+    assert reset.get_json()["error"]["code"] == "account_error"
+    assert accounts.authenticate("alice", "old-password") is not None
 
 
 def test_account_settings_requires_verification_and_updates_credentials(monkeypatch, tmp_path):

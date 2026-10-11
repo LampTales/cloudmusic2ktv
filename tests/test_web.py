@@ -373,3 +373,18 @@ def test_captcha_creates_an_http_only_server_side_browser_session(monkeypatch, t
     assert "SameSite=Lax" in cookie
     assert "server-secret" not in cookie
     assert "server-secret" in next(tmp_path.glob("*.json")).read_text(encoding="utf-8")
+
+
+def test_captcha_send_is_rate_limited_per_phone_and_client(monkeypatch, tmp_path):
+    monkeypatch.setattr(web_app, "auth_sessions", FileSessionStore(tmp_path))
+    monkeypatch.setattr(web_app, "CAPTCHA_SEND_LIMIT", 1)
+    monkeypatch.setattr(web_app, "auth_rate_attempts", {})
+    monkeypatch.setattr(NeteaseClient, "send_captcha", lambda self, phone, country_code="86": {"code": 200})
+    client = web_app.app.test_client()
+
+    first = client.post("/api/auth/captcha", json={"phone": "10000000001", "country_code": "86"})
+    second = client.post("/api/auth/captcha", json={"phone": "10000000001", "country_code": "86"})
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.get_json()["error"]["code"] == "rate_limited"

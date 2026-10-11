@@ -60,9 +60,27 @@ PLAYLIST_CACHE_MAX_ENTRIES = int(os.environ.get("CLOUDMUSIC2KTV_PLAYLIST_CACHE_M
 APPLICATION_LIMIT = int(os.environ.get("CLOUDMUSIC2KTV_APPLICATION_LIMIT", str(DEFAULT_APPLICATION_LIMIT)))
 IDENTITY_CONFIRMATION_TTL_SECONDS = 5 * 60
 ACCOUNT_VERIFICATION_TTL_SECONDS = 5 * 60
+LOGIN_FAILURE_LIMIT = int(os.environ.get("CLOUDMUSIC2KTV_LOGIN_FAILURE_LIMIT", "8"))
+LOGIN_FAILURE_WINDOW_SECONDS = int(
+    os.environ.get("CLOUDMUSIC2KTV_LOGIN_FAILURE_WINDOW_SECONDS", "300")
+)
+CAPTCHA_SEND_LIMIT = int(os.environ.get("CLOUDMUSIC2KTV_CAPTCHA_SEND_LIMIT", "3"))
+CAPTCHA_SEND_WINDOW_SECONDS = int(
+    os.environ.get("CLOUDMUSIC2KTV_CAPTCHA_SEND_WINDOW_SECONDS", "60")
+)
+COOKIE_IMPORT_IP_LIMIT = int(os.environ.get("CLOUDMUSIC2KTV_COOKIE_IMPORT_IP_LIMIT", "20"))
+COOKIE_IMPORT_IP_WINDOW_SECONDS = int(
+    os.environ.get("CLOUDMUSIC2KTV_COOKIE_IMPORT_IP_WINDOW_SECONDS", "600")
+)
 MEDIA_SIGNING_KEY_FILE = INSTANCE / "media_signing.key"
 _media_signing_key_lock = threading.Lock()
 _media_signing_key_cache: bytes | None = None
+
+
+class RateLimitError(AccountError):
+    def __init__(self, message: str, retry_after: int):
+        super().__init__(message)
+        self.retry_after = max(1, int(retry_after))
 
 
 def normalize_base_path(value: str | None) -> str:
@@ -150,7 +168,9 @@ playlist_cache = PlaylistCache(
 download_state_lock = threading.Lock()
 active_downloads: set[int] = set()
 cookie_import_rate_lock = threading.Lock()
-cookie_import_last_attempt: dict[str, float] = {}
+cookie_import_last_attempt: dict[str, list[float]] = {}
+auth_rate_lock = threading.Lock()
+auth_rate_attempts: dict[str, list[float]] = {}
 auth_sessions.cleanup_expired()
 
 
@@ -266,11 +286,69 @@ def auth_csrf() -> Any:
         return response
 
 
+def _client_address() -> str:
+    """Use ProxyFix's resolved address only when a trusted proxy is enabled."""
+    return str(request.remote_addr or "unknown").strip()[:128] or "unknown"
+
+
+def _rate_limit(
+    store: dict[str, list[float]],
+    lock: threading.Lock,
+    key: str,
+    *,
+    limit: int,
+    window_seconds: int,
+) -> tuple[bool, int]:
+    """Record an attempt and return (allowed, retry-after seconds)."""
+    now = time.monotonic()
+    window = max(1, int(window_seconds))
+    threshold = now - window
+    with lock:
+        attempts = [timestamp for timestamp in store.get(key, []) if timestamp > threshold]
+        if len(attempts) >= max(1, int(limit)):
+            retry_after = max(1, int(attempts[0] + window - now + 0.999))
+            store[key] = attempts
+            return False, retry_after
+        attempts.append(now)
+        store[key] = attempts
+        # Keep this process-local map bounded if it serves a long-lived public
+        # deployment.  Old entries are harmless but should not grow forever.
+        if len(store) > 4096:
+            for old_key, old_attempts in list(store.items()):
+                if not old_attempts or old_attempts[-1] <= threshold:
+                    store.pop(old_key, None)
+            if len(store) > 4096:
+                excess = len(store) - 4096
+                oldest = sorted(store.items(), key=lambda item: item[1][-1])[:excess]
+                for old_key, _ in oldest:
+                    store.pop(old_key, None)
+        return True, 0
+
+
+def _clear_rate_limit(store: dict[str, list[float]], lock: threading.Lock, key: str) -> None:
+    with lock:
+        store.pop(key, None)
+
+
 @app.post("/api/auth/captcha")
 def send_captcha() -> Any:
     body = json_body()
     phone = required_string(body, "phone")
     country_code = clean_country_code(body.get("country_code", "86"))
+    if len(phone) > 32 or len(country_code) > 8:
+        return error_response("手机号或国家/地区代码格式不正确", "invalid_request", 400)
+    key = f"captcha:{_client_address()}:{country_code}:{phone}"
+    allowed, retry_after = _rate_limit(
+        auth_rate_attempts,
+        auth_rate_lock,
+        key,
+        limit=CAPTCHA_SEND_LIMIT,
+        window_seconds=CAPTCHA_SEND_WINDOW_SECONDS,
+    )
+    if not allowed:
+        response, status_code = error_response("验证码发送过于频繁，请稍后再试", "rate_limited", 429)
+        response.headers["Retry-After"] = str(retry_after)
+        return response, status_code
     with auth_sessions.open(auth_token(), create=True, touch=True) as session:
         assert session is not None
         session.client.send_captcha(phone, country_code)
@@ -293,13 +371,33 @@ def _cookie_import_profile(session: Any, body: dict[str, Any]) -> dict[str, Any]
         raise AccountError("Cookie 导入请求已失效，请重新打开导入窗口")
     now = time.monotonic()
     with cookie_import_rate_lock:
-        for token, timestamp in list(cookie_import_last_attempt.items()):
-            if now - timestamp > 600:
-                cookie_import_last_attempt.pop(token, None)
-        previous = cookie_import_last_attempt.get(session.token, 0.0)
-        if now - previous < 3.0:
+        for key, attempts in list(cookie_import_last_attempt.items()):
+            active = [timestamp for timestamp in attempts if now - timestamp <= 600]
+            if active:
+                cookie_import_last_attempt[key] = active
+            else:
+                cookie_import_last_attempt.pop(key, None)
+        if len(cookie_import_last_attempt) > 4096:
+            excess = len(cookie_import_last_attempt) - 4096
+            oldest = sorted(
+                cookie_import_last_attempt.items(),
+                key=lambda item: item[1][-1] if item[1] else 0.0,
+            )[:excess]
+            for key, _ in oldest:
+                cookie_import_last_attempt.pop(key, None)
+        session_key = f"session:{session.token}"
+        session_attempts = cookie_import_last_attempt.get(session_key, [])
+        if session_attempts and now - session_attempts[-1] < 3.0:
             raise AccountError("Cookie 导入操作过于频繁，请稍后再试")
-        cookie_import_last_attempt[session.token] = now
+        session_attempts.append(now)
+        cookie_import_last_attempt[session_key] = session_attempts
+        ip_key = f"ip:{_client_address()}"
+        ip_attempts = cookie_import_last_attempt.get(ip_key, [])
+        if len(ip_attempts) >= max(1, COOKIE_IMPORT_IP_LIMIT):
+            retry_after = max(1, int(ip_attempts[0] + COOKIE_IMPORT_IP_WINDOW_SECONDS - now + 0.999))
+            raise RateLimitError("Cookie 导入操作过于频繁，请稍后再试", retry_after)
+        ip_attempts.append(now)
+        cookie_import_last_attempt[ip_key] = ip_attempts
     try:
         session.client.load_imported_cookies(body.get("cookies"))
         value = session.client.account_status()
@@ -631,9 +729,24 @@ def login() -> Any:
     body = json_body()
     username = required_string(body, "username")
     password = required_string(body, "password")
+    if len(username) > 80 or len(password) > 256:
+        return error_response("网站用户名或密码不正确", "invalid_credentials", 401)
+    failure_key = f"login:{_client_address()}:{username.casefold()}"
     account = website_accounts.authenticate(username, password)
     if account is None:
+        allowed, retry_after = _rate_limit(
+            auth_rate_attempts,
+            auth_rate_lock,
+            failure_key,
+            limit=LOGIN_FAILURE_LIMIT,
+            window_seconds=LOGIN_FAILURE_WINDOW_SECONDS,
+        )
+        if not allowed:
+            response, status_code = error_response("登录尝试过于频繁，请稍后再试", "rate_limited", 429)
+            response.headers["Retry-After"] = str(retry_after)
+            return response, status_code
         return error_response("网站用户名或密码不正确", "invalid_credentials", 401)
+    _clear_rate_limit(auth_rate_attempts, auth_rate_lock, failure_key)
     role = allowlist.role_for(account["netease_user_id"])
     if role is None:
         if allowlist.application_for(account["netease_user_id"]):
@@ -642,6 +755,14 @@ def login() -> Any:
     previous_token = None
     with auth_sessions.open(auth_token(), create=True, touch=True) as session:
         assert session is not None
+        # Never carry an unfinished high-privilege verification flow or
+        # imported NetEase cookies into a newly authenticated site session.
+        session.pending_qr = None
+        session.pending_identity_confirmation = None
+        session.pending_password_reset = None
+        session.pending_account_settings = None
+        session.client.session.cookies.clear()
+        session.csrf_token = secrets.token_urlsafe(32)
         session.profile = {
             "username": account["username"],
             "netease_user_id": account["netease_user_id"],
@@ -701,6 +822,8 @@ def register() -> Any:
             session.client.session.cookies.clear()
             session.pending_qr = None
             session.pending_identity_confirmation = None
+            session.pending_password_reset = None
+            session.pending_account_settings = None
             auth_sessions.delete(session.token)
             response = jsonify({"ok": True, "status": "pending", "message": "申请仍在等待管理员审批", "application": {**existing_application, "userId": str(profile["userId"])}})
             response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
@@ -716,6 +839,10 @@ def register() -> Any:
             if application["status"] == "pending":
                 if existing_account:
                     session.client.session.cookies.clear()
+                    session.pending_qr = None
+                    session.pending_identity_confirmation = None
+                    session.pending_password_reset = None
+                    session.pending_account_settings = None
                     auth_sessions.delete(session.token)
                     response = jsonify({"ok": True, "status": "pending", "message": "申请仍在等待管理员审批", "application": application.get("application")})
                     response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
@@ -728,6 +855,8 @@ def register() -> Any:
                 session.client.session.cookies.clear()
                 session.pending_qr = None
                 session.pending_identity_confirmation = None
+                session.pending_password_reset = None
+                session.pending_account_settings = None
                 auth_sessions.delete(session.token)
                 response = jsonify({"ok": True, "status": "pending", "message": "申请已提交，请等待管理员审批", "application": application.get("application")})
                 response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH, samesite="Lax")
@@ -747,6 +876,8 @@ def register() -> Any:
             session.client.session.cookies.clear()
             session.pending_qr = None
             session.pending_identity_confirmation = None
+            session.pending_password_reset = None
+            session.pending_account_settings = None
             session.csrf_token = secrets.token_urlsafe(32)
             session.profile = {
                 "username": account["username"],
@@ -1400,6 +1531,13 @@ def handle_user_not_allowed(error: UserNotAllowed) -> Any:
 @app.errorhandler(AccountError)
 def handle_account_error(error: AccountError) -> Any:
     return error_response(str(error), "account_error", 400)
+
+
+@app.errorhandler(RateLimitError)
+def handle_rate_limit_error(error: RateLimitError) -> Any:
+    response, status_code = error_response(str(error), "rate_limited", 429)
+    response.headers["Retry-After"] = str(error.retry_after)
+    return response, status_code
 
 
 @app.errorhandler(Exception)

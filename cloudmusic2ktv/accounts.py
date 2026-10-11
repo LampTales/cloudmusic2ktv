@@ -41,8 +41,8 @@ class WebsiteAccountStore:
         key = self._username_key(username)
         if not USERNAME_PATTERN.fullmatch(username.strip()):
             raise AccountError("网站用户名需要为 2～40 个不含空格的字符")
-        if len(password) < 6:
-            raise AccountError("网站密码至少需要 6 个字符")
+        if len(password) < 6 or len(password) > 256:
+            raise AccountError("网站密码需要为 6～256 个字符")
         user_id = self._normalize_id(netease_user_id)
         if user_id is None:
             raise AccountError("网易云用户 ID 无效")
@@ -71,8 +71,8 @@ class WebsiteAccountStore:
         key = self._username_key(username)
         if not USERNAME_PATTERN.fullmatch(username.strip()):
             raise AccountError("网站用户名需要为 2～40 个不含空格的字符")
-        if len(password) < 6:
-            raise AccountError("网站密码至少需要 6 个字符")
+        if len(password) < 6 or len(password) > 256:
+            raise AccountError("网站密码需要为 6～256 个字符")
         with self._lock:
             value = self._read()
             if key in value["users"]:
@@ -105,8 +105,8 @@ class WebsiteAccountStore:
             if not USERNAME_PATTERN.fullmatch(stripped):
                 raise AccountError("网站用户名需要为 2～40 个不含空格的字符")
             new_key = self._username_key(stripped)
-        if password is not None and len(password) < 6:
-            raise AccountError("网站密码至少需要 6 个字符")
+        if password is not None and (len(password) < 6 or len(password) > 256):
+            raise AccountError("网站密码需要为 6～256 个字符")
         if username is None and password is None:
             raise AccountError("请至少修改用户名或密码")
         with self._lock:
