@@ -97,7 +97,10 @@
     const h = harness();
     h.window.createNEFingerprint = () => ({getToken: async () => ({token: "token"})});
     const oldResponse = deferred(); h.replies.push(oldResponse.promise);
-    await h.functions.startQrFlow(ui()); const oldPoll = h.tick(); await flush();
+    const firstPanel = ui();
+    await h.functions.startQrFlow(firstPanel); const oldPoll = h.tick(); await flush();
+    assert(firstPanel.link.href.includes("api.qrserver.com"), "QR link must download the rendered image");
+    assert(firstPanel.link.download === "netease-qr-code.png", "QR link must use a PNG download name");
     const panel = ui(); await h.functions.startQrFlow(panel);
     oldResponse.reject(new Error("old error")); await oldPoll;
     assert(h.interval && !h.notices.length, "old errors must not stop new QR flow");

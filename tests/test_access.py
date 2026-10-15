@@ -565,6 +565,68 @@ def test_playlist_tracks_rejects_an_overlong_query(monkeypatch, tmp_path):
     assert response.get_json()["error"]["code"] == "invalid_query"
 
 
+def test_song_search_adds_a_direct_match_for_id_or_share_link(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2")
+    monkeypatch.setattr(web_app, "OUTPUTS", tmp_path / "outputs")
+    calls = []
+
+    def song_detail(self, song_id):
+        calls.append(("detail", song_id))
+        return {
+            "id": song_id,
+            "name": "透明人间",
+            "artists": ["東京事変"],
+            "artist": "東京事変",
+            "album": "大人",
+            "cover_url": "https://example.test/cover.jpg",
+            "duration_ms": 1000,
+            "fee": 0,
+            "copyright": 1,
+        }
+
+    def search_songs(self, query):
+        calls.append(("search", query))
+        return [{"id": 12, "name": "普通搜索结果", "artist": "歌手", "album": "专辑"}]
+
+    monkeypatch.setattr(NeteaseClient, "song_detail", song_detail)
+    monkeypatch.setattr(NeteaseClient, "search_songs", search_songs)
+    query = (
+        "分享東京事変的单曲《透明人间》: "
+        "https://y.music.163.com/m/song?id=838535&userid=1456219568&dlt=0846 "
+        "(来自@网易云音乐)"
+    )
+
+    response = client.get("/api/search", query_string={"q": query})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["direct_song"]["id"] == 838535
+    assert payload["songs"][0]["id"] == 12
+    assert calls == [("detail", 838535), ("search", query)]
+
+
+def test_song_search_keeps_normal_keyword_response_unchanged(monkeypatch, tmp_path):
+    client = member_client(monkeypatch, tmp_path, user_id="2")
+    monkeypatch.setattr(
+        NeteaseClient,
+        "search_songs",
+        lambda self, query: [{"id": 12, "name": query}],
+    )
+    monkeypatch.setattr(
+        NeteaseClient,
+        "song_detail",
+        lambda self, song_id: (_ for _ in ()).throw(AssertionError("normal search must not inspect an ID")),
+    )
+
+    response = client.get("/api/search", query_string={"q": "透明人间 東京事変"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "ok": True,
+        "songs": [{"id": 12, "name": "透明人间 東京事変"}],
+    }
+
+
 def test_cookie_check_reports_expired_bound_cookie(monkeypatch, tmp_path):
     client = member_client(monkeypatch, tmp_path, user_id="2")
     bindings = NeteaseBindingStore(tmp_path / "bindings.json")

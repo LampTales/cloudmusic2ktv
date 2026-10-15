@@ -1106,8 +1106,33 @@ def search() -> Any:
     if not query:
         return error_response("请输入歌名或“歌名 歌手”", "invalid_query", 400)
     with anonymous_netease_client() as client:
-        songs = client.search_songs(query)
-    return jsonify({"ok": True, "songs": songs})
+        direct_song = None
+        try:
+            direct_song_id = parse_song_id(query)
+        except ValueError:
+            direct_song_id = None
+        if direct_song_id is not None:
+            # Reuse the same inspection path as the ID/link input mode.  A
+            # failed direct lookup should not prevent ordinary search results
+            # from being returned for the original query text.
+            try:
+                direct_song = SongDownloadService(
+                    client, OUTPUTS, video_jobs_state_path=INSTANCE / "video_jobs.json"
+                ).inspect(direct_song_id)
+            except NeteaseError:
+                direct_song = None
+        try:
+            songs = client.search_songs(query)
+        except NeteaseError:
+            if direct_song is None:
+                raise
+            # Some share texts are not accepted as search keywords.  Keep the
+            # direct match useful even when the secondary text search fails.
+            songs = []
+    payload = {"ok": True, "songs": songs}
+    if direct_song is not None:
+        payload["direct_song"] = direct_song
+    return jsonify(payload)
 
 
 @app.get("/api/playlists")

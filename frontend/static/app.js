@@ -903,8 +903,33 @@ async function startQrFlow({image, status, link, button, onVerified, purpose = "
       body: JSON.stringify({browser_user_agent: navigator.userAgent, yd_device_token: initialToken, ...(purpose ? {purpose} : {})}),
     });
     if (flowId !== qrFlowId) return;
-    image.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(data.qr_url)}`;
-    link.href = data.qr_url;
+    const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(data.qr_url)}`;
+    image.src = qrImageUrl;
+    // Download the rendered QR image instead of opening data.qr_url, which is
+    // NetEase's mobile scan-login page and may appear as a web login screen.
+    // Fetching the image into a Blob makes the download reliable on browsers
+    // that ignore download= for cross-origin URLs. Keep the direct image URL
+    // as a fallback if the image service is unavailable or CORS is blocked.
+    if (link._qrDownloadUrl && typeof URL !== "undefined" && URL.revokeObjectURL) {
+      URL.revokeObjectURL(link._qrDownloadUrl);
+      link._qrDownloadUrl = "";
+    }
+    link.href = qrImageUrl;
+    link.download = "netease-qr-code.png";
+    link.target = "_self";
+    if (typeof fetch === "function" && typeof URL !== "undefined" && URL.createObjectURL) {
+      fetch(qrImageUrl, {mode: "cors"}).then(response => {
+        if (!response.ok) throw new Error("二维码图片下载失败");
+        return response.blob();
+      }).then(blob => {
+        if (flowId !== qrFlowId) return;
+        const objectUrl = URL.createObjectURL(blob);
+        link._qrDownloadUrl = objectUrl;
+        link.href = objectUrl;
+      }).catch(() => {
+        // The direct image URL remains usable as a browser download fallback.
+      });
+    }
     status.textContent = "请使用网易云音乐 App 扫描二维码。";
     let secureCaptcha;
     let pollInFlight = false;
@@ -1892,6 +1917,31 @@ $("#songInput").addEventListener("input", (event) => {
   updateVideoSongTarget(event.currentTarget.value.trim() !== String(selectedSong.id));
 });
 
+function createSearchResultRow(song, directMatch = false) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = directMatch ? "result-row direct-match" : "result-row";
+  const copy = document.createElement("span");
+  const title = document.createElement("strong");
+  title.textContent = song.name;
+  const meta = document.createElement("small");
+  meta.textContent = `${song.artist} · ${song.album}`;
+  copy.append(title, meta);
+  if (directMatch) {
+    const badge = document.createElement("em");
+    badge.textContent = "匹配输入";
+    row.append(copy, badge);
+  } else {
+    row.append(copy);
+  }
+  row.addEventListener("click", async () => {
+    row.disabled = true;
+    await inspectSong(song.id);
+    row.disabled = false;
+  });
+  return row;
+}
+
 $("#search").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   const query = $("#searchInput").value.trim();
@@ -1901,20 +1951,9 @@ $("#search").addEventListener("click", async (event) => {
     const data = await api(`/api/search?q=${encodeURIComponent(query)}`, {headers: {}});
     const container = $("#searchResults");
     container.replaceChildren();
-    for (const song of data.songs) {
-      const row = document.createElement("button"); row.className = "result-row";
-      const copy = document.createElement("span");
-      const title = document.createElement("strong"); title.textContent = song.name;
-      const meta = document.createElement("small"); meta.textContent = `${song.artist} · ${song.album}`;
-      copy.append(title, meta); row.append(copy);
-      row.addEventListener("click", async () => {
-        row.disabled = true;
-        await inspectSong(song.id);
-        row.disabled = false;
-      });
-      container.append(row);
-    }
-    if (!data.songs.length) container.textContent = "没有找到歌曲";
+    if (data.direct_song) container.append(createSearchResultRow(data.direct_song, true));
+    for (const song of data.songs) container.append(createSearchResultRow(song));
+    if (!data.direct_song && !data.songs.length) container.textContent = "没有找到歌曲";
     container.classList.remove("hidden");
   } catch (error) { notify(error.message, true); }
   finally { busy(button, false); }
