@@ -903,8 +903,33 @@ async function startQrFlow({image, status, link, button, onVerified, purpose = "
       body: JSON.stringify({browser_user_agent: navigator.userAgent, yd_device_token: initialToken, ...(purpose ? {purpose} : {})}),
     });
     if (flowId !== qrFlowId) return;
-    image.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(data.qr_url)}`;
-    link.href = data.qr_url;
+    const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(data.qr_url)}`;
+    image.src = qrImageUrl;
+    // Download the rendered QR image instead of opening data.qr_url, which is
+    // NetEase's mobile scan-login page and may appear as a web login screen.
+    // Fetching the image into a Blob makes the download reliable on browsers
+    // that ignore download= for cross-origin URLs. Keep the direct image URL
+    // as a fallback if the image service is unavailable or CORS is blocked.
+    if (link._qrDownloadUrl && typeof URL !== "undefined" && URL.revokeObjectURL) {
+      URL.revokeObjectURL(link._qrDownloadUrl);
+      link._qrDownloadUrl = "";
+    }
+    link.href = qrImageUrl;
+    link.download = "netease-qr-code.png";
+    link.target = "_self";
+    if (typeof fetch === "function" && typeof URL !== "undefined" && URL.createObjectURL) {
+      fetch(qrImageUrl, {mode: "cors"}).then(response => {
+        if (!response.ok) throw new Error("二维码图片下载失败");
+        return response.blob();
+      }).then(blob => {
+        if (flowId !== qrFlowId) return;
+        const objectUrl = URL.createObjectURL(blob);
+        link._qrDownloadUrl = objectUrl;
+        link.href = objectUrl;
+      }).catch(() => {
+        // The direct image URL remains usable as a browser download fallback.
+      });
+    }
     status.textContent = "请使用网易云音乐 App 扫描二维码。";
     let secureCaptcha;
     let pollInFlight = false;
