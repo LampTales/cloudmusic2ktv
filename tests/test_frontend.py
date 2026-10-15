@@ -171,6 +171,16 @@ def test_login_uses_password_manager_form_semantics():
     assert 'id="searchInput" name="song-search" type="search"' in page
 
 
+def test_song_search_can_place_a_direct_input_match_before_search_results():
+    script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    css = (FRONTEND_ROOT / "static" / "app.css").read_text(encoding="utf-8")
+
+    assert "function createSearchResultRow(song, directMatch = false)" in script
+    assert 'if (data.direct_song) container.append(createSearchResultRow(data.direct_song, true));' in script
+    assert 'if (!data.direct_song && !data.songs.length) container.textContent = "没有找到歌曲";' in script
+    assert ".result-row.direct-match" in css
+
+
 def test_rare_netease_identity_confirmation_has_an_isolated_modal():
     page = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
     script = (FRONTEND_ROOT / "static" / "app.js").read_text(encoding="utf-8")

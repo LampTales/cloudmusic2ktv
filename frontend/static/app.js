@@ -1917,6 +1917,31 @@ $("#songInput").addEventListener("input", (event) => {
   updateVideoSongTarget(event.currentTarget.value.trim() !== String(selectedSong.id));
 });
 
+function createSearchResultRow(song, directMatch = false) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = directMatch ? "result-row direct-match" : "result-row";
+  const copy = document.createElement("span");
+  const title = document.createElement("strong");
+  title.textContent = song.name;
+  const meta = document.createElement("small");
+  meta.textContent = `${song.artist} · ${song.album}`;
+  copy.append(title, meta);
+  if (directMatch) {
+    const badge = document.createElement("em");
+    badge.textContent = "匹配输入";
+    row.append(copy, badge);
+  } else {
+    row.append(copy);
+  }
+  row.addEventListener("click", async () => {
+    row.disabled = true;
+    await inspectSong(song.id);
+    row.disabled = false;
+  });
+  return row;
+}
+
 $("#search").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   const query = $("#searchInput").value.trim();
@@ -1926,20 +1951,9 @@ $("#search").addEventListener("click", async (event) => {
     const data = await api(`/api/search?q=${encodeURIComponent(query)}`, {headers: {}});
     const container = $("#searchResults");
     container.replaceChildren();
-    for (const song of data.songs) {
-      const row = document.createElement("button"); row.className = "result-row";
-      const copy = document.createElement("span");
-      const title = document.createElement("strong"); title.textContent = song.name;
-      const meta = document.createElement("small"); meta.textContent = `${song.artist} · ${song.album}`;
-      copy.append(title, meta); row.append(copy);
-      row.addEventListener("click", async () => {
-        row.disabled = true;
-        await inspectSong(song.id);
-        row.disabled = false;
-      });
-      container.append(row);
-    }
-    if (!data.songs.length) container.textContent = "没有找到歌曲";
+    if (data.direct_song) container.append(createSearchResultRow(data.direct_song, true));
+    for (const song of data.songs) container.append(createSearchResultRow(song));
+    if (!data.direct_song && !data.songs.length) container.textContent = "没有找到歌曲";
     container.classList.remove("hidden");
   } catch (error) { notify(error.message, true); }
   finally { busy(button, false); }

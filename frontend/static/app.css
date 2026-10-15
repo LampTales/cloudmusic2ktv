@@ -249,6 +249,9 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .result-row span { min-width: 0; }
 .result-row strong, .result-row small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .result-row small { margin-top: 4px; color: var(--muted); }
+.result-row.direct-match { justify-content: space-between; gap: 12px; background: #fff8f8; border-bottom-color: #f3cccc; }
+.result-row.direct-match:hover { background: #fff1f1; }
+.result-row.direct-match em { flex: 0 0 auto; color: var(--red); font-size: 11px; font-style: normal; font-weight: 800; }
 
 .current-song { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 30px; padding: 22px; overflow: hidden; }
 .current-cover-wrap { position: relative; }

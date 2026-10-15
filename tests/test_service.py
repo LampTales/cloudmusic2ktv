@@ -20,6 +20,12 @@ from cloudmusic2ktv.netease import NeteaseError
         ("https://music.163.com/#/song?id=642810", 642810),
         ("https://music.163.com/song?id=642810&userid=1", 642810),
         ("https://music.163.com/song/642810", 642810),
+        (
+            "分享東京事変的单曲《透明人间》: "
+            "https://y.music.163.com/m/song?id=838535&userid=1456219568&dlt=0846 "
+            "(来自@网易云音乐)",
+            838535,
+        ),
     ],
 )
 def test_parse_song_id(value, expected):
