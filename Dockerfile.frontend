@@ -1,4 +1,7 @@
-FROM nginx:1.27-alpine
+FROM nginx:1.30.6-alpine
+
+RUN apk upgrade --no-cache \
+    && apk add --no-cache 'ca-certificates>=20261020-r0'
 
 ENV BACKEND_UPSTREAM=http://backend:7860
 

@@ -32,7 +32,7 @@ def test_backend_image_uses_pinned_public_lyric_align_package():
         assert NEXTFIRE_REVISION in compose
         assert "wav2vec2-large-xlsr-53-japanese" not in compose
 
-    builder, runtime = dockerfile.split("FROM python:3.11-slim-bookworm", maxsplit=2)[1:]
+    builder, runtime = dockerfile.split("FROM python:3.11.18-slim-bookworm", maxsplit=2)[1:]
     assert "pkg-config" in builder
     assert "libopus-dev" in builder
     assert "pkg-config" not in runtime

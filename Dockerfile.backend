@@ -1,4 +1,4 @@
-FROM python:3.11-slim-bookworm AS wheel-builder
+FROM python:3.11.18-slim-bookworm AS wheel-builder
 
 ENV PIP_NO_CACHE_DIR=1
 
@@ -6,11 +6,15 @@ WORKDIR /build
 
 COPY requirements.txt requirements-model.txt constraints-model.txt ./
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential pkg-config libopus-dev \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates build-essential pkg-config libopus-dev \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge '20250419~deb12u2' \
+    && python -m pip install --upgrade 'pip>=26.2.2,<27' 'setuptools>=84.1.0' wheel \
+    && python -m pip wheel --wheel-dir /wheels 'pip>=26.2.2,<27' \
     && python -m pip wheel --wheel-dir /wheels -r requirements-model.txt \
     && rm -rf /var/lib/apt/lists/* /root/.cache
 
-FROM python:3.11-slim-bookworm
+FROM python:3.11.18-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -20,14 +24,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     CLOUDMUSIC2KTV_FONT_DIR=/usr/share/fonts/opentype/noto
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk fonts-dejavu \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates ffmpeg fonts-noto-cjk fonts-dejavu \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge '20250419~deb12u2' \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt ./requirements.txt
 COPY --from=wheel-builder /wheels /wheels
-RUN python -m pip install --no-index --find-links=/wheels -r requirements.txt 'lyric-align[models]' \
+RUN python -m pip install --no-index --find-links=/wheels --upgrade 'pip>=26.2.2,<27' \
+    && python -m pip install --no-index --find-links=/wheels -r requirements.txt 'lyric-align[models]' \
+    && python -m pip check \
     && python -c "import lyric_align; assert lyric_align.__version__ == '0.1.0'" \
     && rm -rf /wheels
 

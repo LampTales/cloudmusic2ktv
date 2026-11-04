@@ -136,7 +136,7 @@ JSON 存储适合可信、低流量、单实例部署。修改会话、artifact�
 
 ## 本地调试与验证
 
-同机 Docker 构建适合验证当前工作区：在仓库根目录复制 `.env.example`，使用 `docker compose build && docker compose up -d`，访问 `http://127.0.0.1:8080/`。源码运行需要 Python 3.11、FFmpeg、CJK 字体和 `requirements-dev.txt`；后端运行 `app.py`，前端开发代理运行 `frontend_server.py`。模型模式另需安装 `requirements-model.txt` 并准备只读模型目录。
+同机 Docker 构建适合验证当前工作区：在仓库根目录复制 `.env.example`，使用 `docker compose build --pull && docker compose up -d`，访问 `http://127.0.0.1:8080/`。源码运行使用 Python 3.11.18 或更新的 3.11 版本、FFmpeg、CJK 字体和 `requirements-dev.txt`；后端运行 `app.py`，前端开发代理运行 `frontend_server.py`。模型模式另需安装 `requirements-model.txt` 并准备只读模型目录；其中 Linux CPU 与 macOS 的 Torch wheel 后缀由平台约束区分。
 
 ```bash
 cd <local-repo>
