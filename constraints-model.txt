@@ -3,6 +3,11 @@
 demucs==4.1.0
 sudachipy==0.6.11
 sudachidict-core==20260723
-torch==2.11.0+cpu
-torchaudio==2.11.0+cpu
+# Linux CPU wheels carry a local version suffix; macOS wheels do not.
+torch==2.11.0+cpu; sys_platform == "linux"
+torchaudio==2.11.0+cpu; sys_platform == "linux"
+torch==2.11.0; sys_platform != "linux"
+torchaudio==2.11.0; sys_platform != "linux"
 transformers==5.16.1
+# Fix local lock-directory attacks in transitive model dependencies.
+filelock>=4.2.1,<5
