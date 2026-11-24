@@ -328,7 +328,7 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .alignment-mode-badge.normal { color: #257b50; background: #eff9f3; border-color: #bfe2ce; }
 .alignment-mode-badge.beta { color: var(--red); background: #fff5f5; border-color: #f3aaaa; }
 .option-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 10px; }
-.option-grid input[type="color"] { height: 46px; padding: 5px; cursor: pointer; }
+.video-options input[type="color"] { height: 46px; padding: 5px; cursor: pointer; }
 .option-grid input[type="file"] { padding: 9px; font-size: 11px; }
 .advanced-options { margin-top: 17px; border-top: 1px solid var(--line); }
 .advanced-options summary { padding: 15px 2px 4px; color: #555; cursor: pointer; font-size: 13px; font-weight: 800; }

@@ -58,6 +58,7 @@ RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
 LYRIC_MODES = {"original", "translation", "romanization"}
 LYRIC_HIGHLIGHT_MODES = {"line", "sweep", "smooth"}
 ALIGNMENT_MODES = {"legacy", "model"}
+ALIGNMENT_LANGUAGES = {"auto", "ja-en", "zh", "cant"}
 PRONUNCIATION_MODES = {"none", "kana", "romaji"}
 AUDIO_MODES = {"original", "instrumental"}
 BACKGROUND_MODES = {"blur", "gradient", "solid", "custom"}
@@ -90,12 +91,14 @@ class VideoOptions:
     quality: str = "balanced"
     opening: bool = True
     interlude_cue: bool = True
+    alignment_language: str = "auto"
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any] | None) -> "VideoOptions":
         value = value or {}
         options = cls(
             alignment_mode=str(value.get("alignment_mode") or "legacy"),
+            alignment_language=str(value.get("alignment_language", "auto")),
             pronunciation_mode=str(value.get("pronunciation_mode") or "none"),
             audio_mode=str(value.get("audio_mode") or "original"),
             lyric_mode=str(value.get("lyric_mode") or "original"),
@@ -117,6 +120,10 @@ class VideoOptions:
     def validate(self) -> None:
         if self.alignment_mode not in ALIGNMENT_MODES:
             raise VideoError("不支持的歌词对齐模式")
+        if self.alignment_language not in ALIGNMENT_LANGUAGES:
+            raise VideoError("不支持的歌词对齐语言")
+        if self.alignment_mode != "model" and self.alignment_language != "auto":
+            raise VideoError("选择对齐语言需要使用模型对齐模式")
         if self.pronunciation_mode not in PRONUNCIATION_MODES:
             raise VideoError("不支持的发音标注模式")
         if self.audio_mode not in AUDIO_MODES:
@@ -151,7 +158,10 @@ class VideoOptions:
         return RESOLUTIONS[self.resolution]
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        values = asdict(self)
+        if self.alignment_mode != "model":
+            values.pop("alignment_language")
+        return values
 
 
 @dataclass(frozen=True)
@@ -196,6 +206,26 @@ class VideoProject:
             custom_background_path=directory / "custom_background.png",
             alignment=alignment,
         )
+
+    @property
+    def alignment_language(self) -> str | None:
+        if not self.alignment:
+            return None
+        # Artifacts from the original Japanese/English aligner predate this field.
+        reading = (self.alignment.get("stages") or {}).get("reading") or {}
+        return reading.get("language", "ja-en")
+
+    def has_alignment_for(self, language: str) -> bool:
+        effective = self.alignment_language
+        if effective is None:
+            return False
+        if language == "auto":
+            try:
+                from lyric_align import detect_language
+            except ImportError:
+                return False
+            language = detect_language(self.directory).language
+        return effective == language
 
     @property
     def duration_ms(self) -> int:
@@ -243,6 +273,9 @@ class FrameRenderer:
         self.options = options
         if options.alignment_mode == "model" and not project.alignment:
             raise VideoError("模型对齐数据不存在，请先完成预处理")
+        self.pronunciation_mode = options.pronunciation_mode
+        if self.pronunciation_mode == "kana" and project.alignment_language != "ja-en":
+            self.pronunciation_mode = "none"
         self.width, self.height = options.size
         self.scale = self.width / 1920
         self.cover = Image.open(project.cover_path).convert("RGB")
@@ -810,7 +843,7 @@ class FrameRenderer:
         else:
             self._draw_wipe_text(frame, text, y, font, align_left, inactive, progress)
 
-        if self.options.alignment_mode == "model" and self.options.pronunciation_mode != "none":
+        if self.options.alignment_mode == "model" and self.pronunciation_mode != "none":
             self._draw_pronunciation(frame, line, text, x_hint=None, y=y, font=font, align_left=align_left)
 
         secondary = None
@@ -838,7 +871,7 @@ class FrameRenderer:
         bbox = self._text_bbox(text, font=font, stroke_width=self._px(3))
         width = bbox[2] - bbox[0]
         x = self._px(76) if align_left else self.width - self._px(76) - width
-        mode = self.options.pronunciation_mode
+        mode = self.pronunciation_mode
         small_size = 23 if mode == "kana" else 18
         units = line.get("display_units") or []
         if units:
@@ -1274,6 +1307,7 @@ def _prepare_model_alignment(project: VideoProject, options: VideoOptions, progr
         raise VideoError("模型模式需要配置 LYRIC_DEMUCS_MODEL_PATH 和 LYRIC_CTC_MODEL_PATH")
     config = AlignmentConfig(
         models=ModelPaths(demucs_model_path=demucs_path, ctc_model_path=ctc_path),
+        language=options.alignment_language,
         g2p_backend=os.environ.get("LYRIC_G2P_BACKEND", "sudachi"),
         device=os.environ.get("LYRIC_DEVICE", "cpu"),
         ffmpeg_path=os.environ.get("LYRIC_FFMPEG_PATH", ffmpeg),
@@ -1551,6 +1585,9 @@ class VideoJobManager:
             job = dict(raw)
             job["id"] = job_id
             if job.get("status") in {"queued", "running"}:
+                # Jobs submitted before language selection used the Japanese/English path.
+                if job["options"].get("alignment_mode") == "model":
+                    job["options"].setdefault("alignment_language", "ja-en")
                 job["status"] = "queued"
                 job["progress"] = min(99, max(0, int(job.get("progress") or 0)))
                 job["message"] = "服务重启后恢复排队"
@@ -1593,8 +1630,12 @@ class VideoJobManager:
 
 
 def video_options_fingerprint(options: VideoOptions) -> str:
+    values = options.to_dict()
+    if options.alignment_language == "ja-en":
+        # Keep the original model job keys and video filenames for this path.
+        values.pop("alignment_language", None)
     encoded = json.dumps(
-        options.to_dict(), ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        values, ensure_ascii=True, sort_keys=True, separators=(",", ":")
     ).encode("ascii")
     return hashlib.sha256(encoded).hexdigest()[:12]
 
