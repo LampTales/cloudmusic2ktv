@@ -247,6 +247,14 @@
                 <option value="romaji">字符上方显示罗马音</option>
               </select>
             </label>
+            <label id="alignmentLanguageControl" class="hidden">歌曲语言
+              <select id="alignmentLanguage" disabled>
+                <option value="auto" selected>自动识别</option>
+                <option value="ja-en">日语 / 英语</option>
+                <option value="zh">普通话</option>
+                <option value="cant">粤语</option>
+              </select>
+            </label>
             <label id="audioModeControl" class="hidden">音频
               <select id="audioMode">
                 <option value="original">原唱</option>
@@ -256,7 +264,7 @@
             <label id="lyricModeControl">歌词显示
               <select id="lyricMode">
                 <option value="kana">标注假名</option>
-                <option value="romanization">标注罗马音</option>
+                <option value="romanization">标注发音</option>
                 <option value="original" selected>仅原文</option>
                 <option value="translation">原文 + 翻译</option>
               </select>

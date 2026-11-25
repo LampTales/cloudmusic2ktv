@@ -2008,6 +2008,7 @@ function videoOptions() {
     : "none";
   return {
     alignment_mode: $("#alignmentMode")?.value || "legacy",
+    ...(model ? {alignment_language: $("#alignmentLanguage").value} : {}),
     pronunciation_mode: pronunciationMode,
     audio_mode: $("#audioMode")?.value || "original",
     lyric_mode: model ? "original" : selectedLyricMode,
@@ -2038,7 +2039,7 @@ function updateConditionalOptions() {
       : "当前为普通模式，点击切换到 Beta 模式");
   }
   if ($("#optionsModeHint")) {
-    $("#optionsModeHint").textContent = model ? "仅支持日语，耗时长" : "点击切换自动标注";
+    $("#optionsModeHint").textContent = model ? "自动对齐耗时较长" : "点击切换自动标注";
   }
   const commonOptions = $(".option-grid");
   const advancedOptions = $("#advancedSelectGrid");
@@ -2050,11 +2051,13 @@ function updateConditionalOptions() {
     }
   };
   if (model) {
-    moveControls(advancedOptions, ["#backgroundModeControl", "#backgroundColorWrap", "#customBackgroundWrap"]);
-    moveControls(commonOptions, ["#audioModeControl", "#lyricModeControl", "#highlightModeControl", "#accentModeControl", "#accentColorWrap"]);
+    moveControls(advancedOptions, ["#backgroundModeControl", "#backgroundColorWrap", "#customBackgroundWrap", "#accentModeControl", "#accentColorWrap"]);
+    moveControls(commonOptions, ["#audioModeControl", "#lyricModeControl", "#highlightModeControl", "#alignmentLanguageControl"]);
   } else {
     moveControls(commonOptions, ["#backgroundModeControl", "#backgroundColorWrap", "#customBackgroundWrap", "#lyricModeControl", "#highlightModeControl", "#accentModeControl", "#accentColorWrap", "#audioModeControl"]);
   }
+  $("#alignmentLanguageControl").classList.toggle("hidden", !model);
+  $("#alignmentLanguage").disabled = !model;
   $("#backgroundColorWrap").classList.toggle("hidden", background !== "solid");
   $("#customBackgroundWrap").classList.toggle("hidden", background !== "custom");
   $("#accentColorWrap").classList.toggle("hidden", $("#accentMode").value !== "custom");
@@ -2064,7 +2067,7 @@ function updateConditionalOptions() {
   const selectedBefore = lyricMode?.value || "original";
   if (lyricMode) {
     const labels = model
-      ? {kana: "标注假名", romanization: "标注罗马音", original: "仅原文"}
+      ? {kana: "标注假名", romanization: "标注发音", original: "仅原文"}
       : {original: "仅原文", translation: "原文 + 翻译", romanization: "原文 + 罗马音"};
     const order = model
       ? ["kana", "romanization", "original", "translation"]
@@ -2077,8 +2080,7 @@ function updateConditionalOptions() {
       option.hidden = !(option.value in labels);
       if (labels[option.value]) option.textContent = labels[option.value];
     }
-    const allowed = model ? new Set(["original", "kana", "romanization"]) : new Set(["original", "translation", "romanization"]);
-    if (!allowed.has(selectedBefore)) lyricMode.value = model ? "kana" : "original";
+    lyricMode.value = selectedBefore in labels ? selectedBefore : (model ? "kana" : "original");
   }
   // Keep the old pronunciation selector available for backwards-compatible
   // markup/API clients, but hide it from the model UI where lyricMode is the

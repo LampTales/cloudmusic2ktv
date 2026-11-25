@@ -1272,11 +1272,12 @@ def video_preview() -> Any:
     project = VideoProject.load(OUTPUTS, song_id)
     # Keep previews cheap: model preprocessing belongs to the serialized
     # video queue, not to a threaded Flask request.
-    preview_fallback = options.alignment_mode == "model" and not project.alignment
+    preview_fallback = options.alignment_mode == "model" and not project.has_alignment_for(options.alignment_language)
     if preview_fallback:
         fallback_values = options.to_dict()
         fallback_values.update(
             alignment_mode="legacy",
+            alignment_language="auto",
             pronunciation_mode="none",
             audio_mode="original",
             lyric_mode="original",

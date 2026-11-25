@@ -127,7 +127,12 @@ def test_global_queue_status_does_not_persist_session(monkeypatch, tmp_path):
     write.assert_not_called()
 
 
-def test_model_preview_without_alignment_falls_back_without_preprocessing(monkeypatch, tmp_path):
+@pytest.mark.parametrize(("requested", "cached_language", "fallback"), [
+    ("auto", None, True), ("zh", "cant", True), ("cant", "cant", False),
+    ("auto", "cant", True), ("auto", "zh", False),
+    ("ja-en", "legacy_artifact", False), ("zh", "legacy_artifact", True),
+])
+def test_model_preview_uses_matching_alignment(monkeypatch, tmp_path, requested, cached_language, fallback):
     monkeypatch.setattr(web_app, "OUTPUTS", tmp_path)
     client = member_client(monkeypatch, tmp_path)
     directory = tmp_path / "123_artist_song"
@@ -141,6 +146,16 @@ def test_model_preview_without_alignment_falls_back_without_preprocessing(monkey
     )
     (directory / "audio.mp3").write_bytes(b"audio")
     (directory / "cover.jpg").write_bytes(b"cover")
+    if cached_language is not None:
+        from types import SimpleNamespace
+        import sys
+        reading = {} if cached_language == "legacy_artifact" else {"language": cached_language}
+        alignment = {"stages": {"reading": reading}}
+        (directory / "alignment.json").write_text("{}")
+        monkeypatch.setattr("cloudmusic2ktv.video._load_alignment_payload", lambda _: alignment)
+        monkeypatch.setitem(sys.modules, "lyric_align", SimpleNamespace(
+            detect_language=lambda _: SimpleNamespace(language="zh"),
+        ))
     seen = {}
 
     def fake_preview(project, options, destination):
@@ -162,6 +177,7 @@ def test_model_preview_without_alignment_falls_back_without_preprocessing(monkey
             "song": 123,
             "options": {
                 "alignment_mode": "model",
+                "alignment_language": requested,
                 "pronunciation_mode": "kana",
                 "audio_mode": "instrumental",
                 "lyric_mode": "translation",
@@ -171,12 +187,16 @@ def test_model_preview_without_alignment_falls_back_without_preprocessing(monkey
     )
 
     assert response.status_code == 200
+    assert response.get_json()["preview"].get("model_fallback", False) is fallback
+    if not fallback:
+        assert seen["options"].alignment_mode == "model"
+        assert seen["options"].alignment_language == requested
+        return
     assert seen["options"].alignment_mode == "legacy"
     assert seen["options"].pronunciation_mode == "none"
     assert seen["options"].audio_mode == "original"
     assert seen["options"].lyric_mode == "original"
     assert seen["options"].lyric_highlight_mode == "sweep"
-    assert response.get_json()["preview"]["model_fallback"] is True
 
 
 def test_local_video_status_lists_only_shareable_generated_mp4(monkeypatch, tmp_path):

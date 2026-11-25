@@ -257,8 +257,14 @@ def test_mode_specific_common_video_options_are_compact_and_ordered():
     assert '$("#audioModeControl")?.classList.toggle("hidden", !model)' in script
     assert 'moveControls(advancedOptions, ["#backgroundModeControl"' in script
     assert 'moveControls(commonOptions, ["#backgroundModeControl", "#backgroundColorWrap", "#customBackgroundWrap", "#lyricModeControl", "#highlightModeControl", "#accentModeControl"' in script
-    assert 'moveControls(commonOptions, ["#audioModeControl", "#lyricModeControl", "#highlightModeControl", "#accentModeControl"' in script
-    assert 'model ? "仅支持日语，耗时长" : "点击切换自动标注"' in script
+    assert 'moveControls(commonOptions, ["#audioModeControl", "#lyricModeControl", "#highlightModeControl", "#alignmentLanguageControl"])' in script
+    assert '{kana: "标注假名", romanization: "标注发音", original: "仅原文"}' in script
+    assert 'moveControls(advancedOptions, ["#backgroundModeControl", "#backgroundColorWrap", "#customBackgroundWrap", "#accentModeControl", "#accentColorWrap"])' in script
+    language = common.split('<select id="alignmentLanguage" disabled>', 1)[1].split('</select>', 1)[0]
+    assert '<option value="auto" selected>自动识别</option>' in language
+    assert all(f'value="{value}"' in language for value in ("ja-en", "zh", "cant"))
+    assert '...(model ? {alignment_language: $("#alignmentLanguage").value} : {})' in script
+    assert 'model ? "自动对齐耗时较长" : "点击切换自动标注"' in script
 
 
 def test_preview_caption_describes_requested_beta_mode_during_fallback():

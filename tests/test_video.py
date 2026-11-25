@@ -1,4 +1,5 @@
 from pathlib import Path
+from dataclasses import replace
 import json
 import threading
 import time
@@ -55,8 +56,11 @@ def test_model_alignment_passes_offset_policy_to_library(tmp_path, monkeypatch, 
         monkeypatch.setenv('LYRIC_OFFSET_ACOUSTIC_VERIFY', 'true')
         monkeypatch.setenv('LYRIC_OFFSET_BOUNDARY_CHECK', 'false')
         monkeypatch.setenv('LYRIC_OFFSET_SILENCE_MS', '2500')
-    video_module._prepare_model_alignment(make_project(tmp_path), VideoOptions(alignment_mode='model'))
+    video_module._prepare_model_alignment(make_project(tmp_path), VideoOptions.from_mapping({
+        "alignment_mode": "model", **({"alignment_language": "cant"} if enabled else {}),
+    }))
     config = seen[0]['config']
+    assert config.language == ("cant" if enabled else "auto")
     assert config.offset_acoustic_verify is enabled
     assert config.offset_boundary_check is not enabled
     assert config.offset_silence_ms == (2500 if enabled else 2000)
@@ -96,9 +100,44 @@ def make_project(tmp_path: Path, first_start: int = 1000) -> VideoProject:
     )
 
 
+@pytest.mark.parametrize("language,reading,latin", [
+    ("zh", "shan", "shan"), ("cant", "saan", "saan"),
+    ("ja-en", "やま", "yama"), (None, "やま", "yama"),
+])
+def test_annotations_follow_resolved_alignment_language(tmp_path, language, reading, latin):
+    line = {"text": "山", "start_ms": 1000, "end_ms": 3000,
+            "surface_spans": [{"surface_start": 0, "surface_end": 1, "reading": reading, "romaji": latin}]}
+    alignment = {"lines": [line]}
+    if language:
+        alignment["stages"] = {"reading": {"language": language}}
+    project = replace(make_project(tmp_path), alignment=alignment)
+    options = VideoOptions(alignment_mode="model", opening=False, spectrum=False, resolution="720p")
+
+    def frame(mode):
+        renderer = FrameRenderer(project, replace(options, pronunciation_mode=mode))
+        return renderer.render(1500).tobytes()
+
+    original, kana, phonetic = (frame(mode) for mode in ("none", "kana", "romaji"))
+    assert phonetic != original
+    assert (kana == original) == (language in ("zh", "cant"))
+    assert kana != phonetic
+
+
 def test_video_options_excludes_overloaded_three_language_mode():
     with pytest.raises(VideoError):
         VideoOptions.from_mapping({"lyric_mode": "translation_and_romanization"})
+
+
+def test_language_selection_is_validated_and_part_of_model_job_key():
+    fingerprints = set()
+    for language in ("auto", "ja-en", "zh", "cant"):
+        options = VideoOptions.from_mapping({"alignment_mode": "model", "alignment_language": language})
+        assert options.to_dict()["alignment_language"] == language
+        fingerprints.add(video_options_fingerprint(options))
+    assert len(fingerprints) == 4
+    assert "alignment_language" not in VideoOptions().to_dict()
+    with pytest.raises(VideoError):
+        VideoOptions.from_mapping({"alignment_mode": "model", "alignment_language": "unknown"})
 
 
 def test_lyric_highlight_defaults_to_whole_line_and_validates_modes():
@@ -774,6 +813,25 @@ def test_video_jobs_prune_terminal_history_on_load(tmp_path):
 
     saved = json.loads(state_path.read_text(encoding="utf-8"))
     assert len(saved["jobs"]) == 100
+
+
+def test_old_beta_job_resumes_with_original_language_and_key(monkeypatch, tmp_path):
+    import hashlib
+
+    values = VideoOptions(alignment_mode="model").to_dict()
+    del values["alignment_language"]
+    old_key = hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]
+    path = tmp_path / "jobs.json"
+    path.write_text(json.dumps({"jobs": {"old": {
+        "song_id": 1, "options": values, "status": "queued",
+        "task_key": f"1:{old_key}", "fingerprint": old_key,
+    }}}))
+    calls = []
+    monkeypatch.setattr(VideoJobManager, "_run", lambda self, job, song, options: calls.append(options))
+    manager = VideoJobManager(tmp_path, state_path=path)
+    manager.executor.shutdown(wait=True)
+    assert calls[0].alignment_language == "ja-en"
+    assert video_options_fingerprint(calls[0]) == old_key
 
 
 def test_video_jobs_resume_queued_work_after_manager_restart(monkeypatch, tmp_path):
