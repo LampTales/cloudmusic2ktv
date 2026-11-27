@@ -706,6 +706,19 @@ async function refreshSelectedLocalStatus() {
   }
 }
 
+function materialMessage(local) {
+  if (!local.ready) return local.message || "";
+  const song = local.song || selectedSong;
+  const qualityLabels = {standard: "标准", higher: "较高", exhigh: "极高", lossless: "无损", hires: "Hi-Res"};
+  const lyricLabels = {original: "原文", translation: "翻译", romanization: "罗马音", karaoke: "逐字/卡拉 OK"};
+  const parts = [[song?.name, song?.artist].filter(Boolean).join(" — "), qualityLabels[local.quality] || local.quality];
+  if (Array.isArray(local.lyric_types)) {
+    const labels = local.lyric_types.map(type => lyricLabels[type] || type);
+    parts.push(`歌词：${labels.join("、") || "无"}`);
+  }
+  return parts.filter(Boolean).join(" · ") || local.message || "";
+}
+
 function applyLocalStatus(local) {
   selectedSongLocal = local || {status: "missing", ready: false, message: "本地没有素材"};
   const box = $("#materialStatus");
@@ -720,9 +733,10 @@ function applyLocalStatus(local) {
     error: "无法检查素材",
   };
   $("#materialStatusTitle").textContent = selectedSongLocal.title || titles[selectedSongLocal.status] || "共享素材状态";
-  $("#materialStatusMessage").textContent = selectedSongLocal.message || "";
+  const message = materialMessage(selectedSongLocal);
+  $("#materialStatusMessage").textContent = message;
   $("#builderMaterialTitle").textContent = selectedSongLocal.title || titles[selectedSongLocal.status] || "歌曲素材";
-  $("#builderMaterialMessage").textContent = selectedSongLocal.message || "准备音频、封面和歌词时间轴";
+  $("#builderMaterialMessage").textContent = message || "准备音频、封面和歌词时间轴";
   const download = $("#download");
   updateResponsiveLabels();
   download.classList.toggle("primary", !selectedSongLocal.ready);
@@ -1971,13 +1985,12 @@ $("#download").addEventListener("click", async (event) => {
   try {
     const data = await api("/api/song/download", {method: "POST", body: JSON.stringify({song: selectedSong.id, level: $("#quality").value})});
     const value = data.result;
-    const qualityLabels = {standard: "标准", higher: "较高", exhigh: "极高", lossless: "无损", hires: "Hi-Res"};
-    const lyricLabels = {original: "原文", translation: "翻译", romanization: "罗马音", karaoke: "逐字/卡拉 OK"};
-    const lyricTypes = (value.lyric_types || []).map(type => lyricLabels[type] || type);
     completedLocal = {
       ...value.local,
+      song: value.song,
+      quality: value.quality,
+      lyric_types: value.lyric_types,
       title: "素材保存完成",
-      message: `${value.song.name} — ${value.song.artist} · ${qualityLabels[value.quality] || value.quality || "自动音质"} · 歌词：${lyricTypes.join("、") || "原文"}`,
     };
     notify("下载完成");
     applyLocalStatus(completedLocal);

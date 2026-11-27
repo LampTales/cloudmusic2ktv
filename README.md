@@ -148,7 +148,7 @@ docker compose up -d
 | `CLOUDMUSIC2KTV_TRUST_PROXY` | 仅在受控反向代理后设为 `1` |
 | `CLOUDMUSIC2KTV_ALLOW_INSECURE_COOKIE_IMPORT` | 仅可信 HTTP 调试网络设为 `1` |
 | `CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY` | 投屏 URL 的 HMAC 密钥；正式环境应固定并备份 |
-| `LYRIC_MMS_FA_MODEL_PATH` | 普通话、粤语和俄语共用的 MMS_FA 权重文件路径 |
+| `LYRIC_MMS_FA_MODEL_PATH` | 普通话、粤语、俄语和法语共用的 MMS_FA 权重文件路径 |
 | `LYRIC_CTC_SCORE_THRESHOLD_JA_EN` / `LYRIC_CTC_SCORE_THRESHOLD_ZH` / `LYRIC_CTC_SCORE_THRESHOLD_CANT` / `LYRIC_CTC_SCORE_THRESHOLD_RU` / `LYRIC_CTC_SCORE_THRESHOLD_FR` | 日英、普通话、粤语、俄语、法语的独立 CTC 分数门槛，自动与手选共用 |
 | `LYRIC_MODELS_DIR` | 宿主机模型根目录（只读挂载到 `/models`） |
 | `LYRIC_DEMUCS_MODEL_PATH` / `LYRIC_CTC_MODEL_PATH` | 容器内模型 snapshot 路径 |
