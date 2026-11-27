@@ -68,7 +68,7 @@ def test_inspect_prefers_ready_shared_metadata_without_network(tmp_path):
                 "name": "共享歌曲",
                 "artist": "歌手",
                 "duration_ms": 10_000,
-                "audio": {"url": "must-not-leak"},
+                "audio": {"level": "exhigh", "url": "must-not-leak"},
             }
         ),
         encoding="utf-8",
@@ -77,9 +77,18 @@ def test_inspect_prefers_ready_shared_metadata_without_network(tmp_path):
     (directory / "audio.mp3").write_bytes(b"ID3")
     Image.new("RGB", (10, 10)).save(directory / "cover.jpg")
 
-    song = SongDownloadService(OfflineClient(), tmp_path).inspect(123)
+    (directory / "lyrics_raw.json").write_text(
+        json.dumps({"lrc": {"lyric": "原文"}, "romalrc": {"lyric": "romanized"}}),
+        encoding="utf-8",
+    )
+    service = SongDownloadService(OfflineClient(), tmp_path)
+    song = service.inspect(123)
     assert song["name"] == "共享歌曲"
     assert "audio" not in song
+    status = service.local_status(123)
+    assert status["song"] == song
+    assert status["quality"] == "exhigh"
+    assert status["lyric_types"] == ["original", "romanization"]
 
 
 def test_available_lyric_types_reports_only_non_empty_sources():

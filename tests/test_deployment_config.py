@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LYRIC_ALIGN_REVISION = "ae8252b4a48f6707c9ec4dffbc5bba97628773ff"
+LYRIC_ALIGN_REVISION = "7475efe99084611cfcfea312cc8b91d2b72e2a67"
 NEXTFIRE_REVISION = "2ab2b5f46539ee284703c281f286b01d2410ee12"
 
 

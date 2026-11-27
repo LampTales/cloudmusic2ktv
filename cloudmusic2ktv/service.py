@@ -250,22 +250,20 @@ def available_lyric_types(payload: dict[str, Any]) -> list[str]:
     return [
         name
         for name, key in mappings
-        if str((payload.get(key) or {}).get("lyric") or "").strip()
+        if isinstance(payload.get(key), dict) and str(payload[key].get("lyric") or "").strip()
     ]
 
 
-def load_local_song(output_root: Path, song_id: int) -> dict[str, Any] | None:
-    status = local_song_status(output_root, song_id)
-    if not status["ready"]:
-        return None
-    directory = sorted(output_root.glob(f"{song_id}_*"))[0]
+def _read_json_object(path: Path) -> dict[str, Any] | None:
     try:
-        value = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return None
-    if not isinstance(value, dict) or int(value.get("id") or 0) != song_id:
-        return None
-    return public_song(value)
+    return value if isinstance(value, dict) else None
+
+
+def load_local_song(output_root: Path, song_id: int) -> dict[str, Any] | None:
+    return local_song_status(output_root, song_id).get("song")
 
 
 def local_song_status(
@@ -299,12 +297,22 @@ def local_song_status(
             audio[0].stat().st_mtime,
             cover[0].stat().st_mtime,
         )
-        return {
+        status = {
             "status": "ready",
             "ready": True,
             "message": "共享素材已经可以使用",
             "updated_at": int(updated_at),
         }
+        song = _read_json_object(metadata)
+        if song and str(song.get("id")) == str(song_id):
+            status["song"] = public_song(song)
+            audio_info = song.get("audio")
+            if isinstance(audio_info, dict):
+                status["quality"] = audio_info.get("level")
+        lyrics = _read_json_object(directory / "lyrics_raw.json")
+        if lyrics is not None:
+            status["lyric_types"] = available_lyric_types(lyrics)
+        return status
     return {
         "status": "partial",
         "ready": False,

@@ -36,7 +36,7 @@ def test_model_alignment_passes_offset_policy_to_library(tmp_path, monkeypatch, 
     class Config:
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
-    library = SimpleNamespace(AlignmentConfig=Config, ModelPaths=lambda **kw: kw,
+    library = SimpleNamespace(AlignmentConfig=Config, ModelPaths=lambda **kw: kw, StageUnavailableError=RuntimeError,
                               prepare_song=lambda *a, **kw: seen.append(kw))
     monkeypatch.setitem(sys.modules, 'lyric_align', library)
     monkeypatch.setattr(video_module, 'get_ffmpeg_executable', lambda: 'ffmpeg')
@@ -46,13 +46,18 @@ def test_model_alignment_passes_offset_policy_to_library(tmp_path, monkeypatch, 
     import_paths = list(sys.path)
     for key in ('BOUNDARY_CHECK', 'SILENCE_MS', 'SUSTAIN_MS', 'BOUNDARY_TOLERANCE_MS', 'ACOUSTIC_VERIFY', 'ACOUSTIC_MIN_MARGIN'):
         monkeypatch.delenv('LYRIC_OFFSET_' + key, raising=False)
-    for key in ('CTC_SCORE_THRESHOLD', 'CTC_COVERAGE_THRESHOLD', 'CTC_MARGIN_MS', 'CTC_ACTIVITY_MARGIN_MS',
+    for key in ('CTC_COVERAGE_THRESHOLD', 'CTC_MARGIN_MS', 'CTC_ACTIVITY_MARGIN_MS',
                 'CTC_ACTIVITY_CONFIDENCE_THRESHOLD', 'ACTIVITY_CONFIDENCE_THRESHOLD',
                 'ACTIVITY_PROJECTION_CONFIDENCE_THRESHOLD'):
         monkeypatch.delenv('LYRIC_' + key, raising=False)
     for key, value in activity_env.items():
         monkeypatch.setenv('LYRIC_' + key, value)
+    for suffix, value in [('JA_EN', '-2.1'), ('ZH', '-1.8'), ('CANT', '-1.7'), ('RU', '-0.65'), ('FR', '-0.7')]:
+        monkeypatch.setenv('LYRIC_CTC_SCORE_THRESHOLD_' + suffix, value)
     if enabled:
+        checkpoint = tmp_path / 'model.pt'
+        checkpoint.touch()
+        monkeypatch.setenv('LYRIC_MMS_FA_MODEL_PATH', str(checkpoint))
         monkeypatch.setenv('LYRIC_OFFSET_ACOUSTIC_VERIFY', 'true')
         monkeypatch.setenv('LYRIC_OFFSET_BOUNDARY_CHECK', 'false')
         monkeypatch.setenv('LYRIC_OFFSET_SILENCE_MS', '2500')
@@ -65,7 +70,9 @@ def test_model_alignment_passes_offset_policy_to_library(tmp_path, monkeypatch, 
     assert config.offset_boundary_check is not enabled
     assert config.offset_silence_ms == (2500 if enabled else 2000)
     assert config.offset_boundary_tolerance_ms == 800
-    assert config.ctc_score_threshold == -2.25
+    assert config.ctc_score_thresholds == ({'cant': -1.7} if enabled else {
+        'ja-en': -2.1, 'zh': -1.8, 'cant': -1.7, 'ru': -0.65, 'fr': -0.7,
+    })
     assert config.ctc_coverage_threshold == 0.8
     assert config.ctc_margin_ms == 500
     assert config.ctc_activity_margin_ms == 120
@@ -101,7 +108,7 @@ def make_project(tmp_path: Path, first_start: int = 1000) -> VideoProject:
 
 
 @pytest.mark.parametrize("language,reading,latin", [
-    ("zh", "shan", "shan"), ("cant", "saan", "saan"),
+    ("zh", "shan", "shan"), ("cant", "saan", "saan"), ("ru", "sh", "sh"),
     ("ja-en", "やま", "yama"), (None, "やま", "yama"),
 ])
 def test_annotations_follow_resolved_alignment_language(tmp_path, language, reading, latin):
@@ -119,7 +126,7 @@ def test_annotations_follow_resolved_alignment_language(tmp_path, language, read
 
     original, kana, phonetic = (frame(mode) for mode in ("none", "kana", "romaji"))
     assert phonetic != original
-    assert (kana == original) == (language in ("zh", "cant"))
+    assert (kana == original) == (language in ("zh", "cant", "ru"))
     assert kana != phonetic
 
 
@@ -130,11 +137,11 @@ def test_video_options_excludes_overloaded_three_language_mode():
 
 def test_language_selection_is_validated_and_part_of_model_job_key():
     fingerprints = set()
-    for language in ("auto", "ja-en", "zh", "cant"):
+    for language in ("auto", "ja-en", "zh", "cant", "ru", "fr"):
         options = VideoOptions.from_mapping({"alignment_mode": "model", "alignment_language": language})
         assert options.to_dict()["alignment_language"] == language
         fingerprints.add(video_options_fingerprint(options))
-    assert len(fingerprints) == 4
+    assert len(fingerprints) == 6
     assert "alignment_language" not in VideoOptions().to_dict()
     with pytest.raises(VideoError):
         VideoOptions.from_mapping({"alignment_mode": "model", "alignment_language": "unknown"})
@@ -385,7 +392,8 @@ def test_model_sweep_keeps_previous_line_until_next_display_unit_starts(tmp_path
 
     assert renderer._line_activation_start(0) == 1100
     assert renderer._line_activation_start(1) == 3400
-    assert renderer._lyric_state(3300)["index"] == 0
+    assert renderer.timeline[0]["display_units"][-1]["end_ms"] == 2300
+    assert renderer._lyric_state(3399)["index"] == 0
     assert renderer._lyric_state(3400)["index"] == 1
 
 
@@ -507,9 +515,35 @@ def test_model_sweep_bridges_only_short_visible_character_gaps(monkeypatch, tmp_
     assert smoothed[2]["start_ms"] == 1300
     assert smoothed[3]["start_ms"] == 1400
     assert smoothed[4]["start_ms"] == 1600
+    assert smoothed[4]["end_ms"] == 1800  # Exactly 200 ms left in the line.
     # Rendering must not mutate the alignment artifact supplied by the caller.
     assert units[0]["end_ms"] == 1100
     assert units[1]["start_ms"] == 1150
+
+
+@pytest.mark.parametrize("gap,remaining", [(199, 0), (200, 0), (201, 1), (540, 340)])
+def test_model_smooth_gap_and_punctuated_tail(monkeypatch, gap, remaining):
+    monkeypatch.delenv("CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS", raising=False)
+    units = [
+        {"text": "甲", "start_ms": 100, "end_ms": 200},
+        {"text": "乙", "start_ms": 200 + gap, "end_ms": 800},
+        {"text": "！", "start_ms": 800, "end_ms": 1100},
+    ]
+    row = {"display_units": units, "end_ms": 1100}
+    first, second, mark = FrameRenderer._smooth_model_sweep_timeline([row])[0]["display_units"]
+    assert first["end_ms"] == 200 + min(gap, 200) // 2
+    assert second["start_ms"] - first["end_ms"] == remaining
+    assert second["end_ms"] == mark["start_ms"] == 900
+    assert mark["end_ms"] == 1100
+    assert units[1]["end_ms"] == units[2]["start_ms"] == 800
+
+
+def test_model_smooth_single_character_with_configured_threshold(monkeypatch):
+    row = {"display_units": [{"text": "啊", "start_ms": 200, "end_ms": 300}], "end_ms": 451}
+    monkeypatch.setenv("CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS", "150")
+    assert FrameRenderer._smooth_model_sweep_timeline([row])[0]["display_units"][0]["end_ms"] == 375
+    monkeypatch.setenv("CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS", "0")
+    assert FrameRenderer._smooth_model_sweep_timeline([row]) == [row]
 
 
 def test_model_sweep_gap_threshold_is_operator_configurable(monkeypatch, tmp_path):
@@ -886,3 +920,32 @@ def test_video_jobs_resume_queued_work_after_manager_restart(monkeypatch, tmp_pa
         time.sleep(0.01)
     assert manager.get("recovered")["status"] == "done"
     manager.executor.shutdown(wait=True)
+
+
+def test_russian_preparation_selects_offline_checkpoint(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import sys
+
+    project = make_project(tmp_path)
+    options = VideoOptions(alignment_mode="model", alignment_language="ru")
+    checkpoint = tmp_path / "model.pt"
+    monkeypatch.setenv("LYRIC_MMS_FA_MODEL_PATH", str(checkpoint))
+    monkeypatch.delenv("LYRIC_CTC_SCORE_THRESHOLD_RU", raising=False)
+    monkeypatch.delenv("LYRIC_CTC_MODEL_PATH", raising=False)
+    monkeypatch.setenv("LYRIC_DEMUCS_MODEL_PATH", "/models/demucs")
+    seen = []
+    def prepare(path, config, **kwargs):
+        if not Path(config.models.mms_fa_model_path).is_file():
+            raise RuntimeError("ru alignment requires a local MMS_FA checkpoint file")
+        seen.append(config)
+
+    monkeypatch.setitem(sys.modules, "lyric_align", SimpleNamespace(
+        AlignmentConfig=SimpleNamespace, ModelPaths=SimpleNamespace,
+        StageUnavailableError=RuntimeError, prepare_song=prepare,
+    ))
+    with pytest.raises(VideoError, match="MMS_FA"):
+        video_module._prepare_model_alignment(project, options)
+    checkpoint.touch()
+    video_module._prepare_model_alignment(project, options)
+    assert seen[0].models.mms_fa_model_path == str(checkpoint) and seen[0].language == "ru"
+    assert seen[0].ctc_score_thresholds == {}
