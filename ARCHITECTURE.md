@@ -98,7 +98,7 @@
 
 `requirements-model.txt` 通过完整提交 SHA 固定公开的 `lyric_align` 源码归档，镜像构建不依赖 Git；更新时应核实提交已推送到远端。默认导入已安装的包，不自动查找相邻仓库。开发时可使用 editable 安装，或显式设置 `LYRIC_ALIGN_PATH` 为源码的 `src/` 目录覆盖导入路径。
 
-模型权重通过 `LYRIC_*_MODEL_PATH` 指向只读挂载的 Hugging Face snapshot；迁移缓存时必须包含 `blobs/`，不能只复制 snapshot 中的符号链接。容器启用离线模式，模型缺失时不会自动下载。普通话和粤语通过拼音或粤拼使用 MMS_FA，俄语使用同一权重。日英使用 NextFire CTC 模型，Sudachi 生成日语 reading 后由库转为拉丁字母目标，英语保留拼写。具体预处理、局部修复和回退策略见独立 `lyric_align` 仓库的 `LIBRARY.md` 和 `PIPELINE.md`。
+模型权重通过 `LYRIC_*_MODEL_PATH` 指向只读挂载的 Hugging Face snapshot；迁移缓存时必须包含 `blobs/`，不能只复制 snapshot 中的符号链接。容器启用离线模式，模型缺失时不会自动下载。普通话和粤语通过拼音或粤拼使用 MMS_FA，俄语和法语使用同一权重。日英使用 NextFire CTC 模型，Sudachi 生成日语 reading 后由库转为拉丁字母目标，英语保留拼写。具体预处理、局部修复和回退策略见独立 `lyric_align` 仓库的 `LIBRARY.md` 和 `PIPELINE.md`。
 
 | 环境变量 | 默认值 | 集成含义 |
 | --- | --- | --- |
@@ -106,6 +106,7 @@
 | `LYRIC_CTC_SCORE_THRESHOLD_ZH` | `-2.25` | 普通话的 CTC 平均分质量门 |
 | `LYRIC_CTC_SCORE_THRESHOLD_CANT` | `-2.25` | 粤语的 CTC 平均分质量门 |
 | `LYRIC_CTC_SCORE_THRESHOLD_RU` | `-0.8` | 俄语的 CTC 平均分质量门 |
+| `LYRIC_CTC_SCORE_THRESHOLD_FR` | `-0.8` | 法语的 CTC 平均分质量门 |
 | `LYRIC_CTC_COVERAGE_THRESHOLD` | `0.8` | CTC 词表覆盖率门限 |
 | `LYRIC_CTC_MARGIN_MS` | `500` | 句级搜索窗口扩展量 |
 | `LYRIC_CTC_ACTIVITY_MARGIN_MS` | `120` | 人声边界搜索余量 |

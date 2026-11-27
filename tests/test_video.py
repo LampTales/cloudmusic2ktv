@@ -52,7 +52,7 @@ def test_model_alignment_passes_offset_policy_to_library(tmp_path, monkeypatch, 
         monkeypatch.delenv('LYRIC_' + key, raising=False)
     for key, value in activity_env.items():
         monkeypatch.setenv('LYRIC_' + key, value)
-    for suffix, value in [('JA_EN', '-2.1'), ('ZH', '-1.8'), ('CANT', '-1.7'), ('RU', '-0.65')]:
+    for suffix, value in [('JA_EN', '-2.1'), ('ZH', '-1.8'), ('CANT', '-1.7'), ('RU', '-0.65'), ('FR', '-0.7')]:
         monkeypatch.setenv('LYRIC_CTC_SCORE_THRESHOLD_' + suffix, value)
     if enabled:
         checkpoint = tmp_path / 'model.pt'
@@ -71,7 +71,7 @@ def test_model_alignment_passes_offset_policy_to_library(tmp_path, monkeypatch, 
     assert config.offset_silence_ms == (2500 if enabled else 2000)
     assert config.offset_boundary_tolerance_ms == 800
     assert config.ctc_score_thresholds == ({'cant': -1.7} if enabled else {
-        'ja-en': -2.1, 'zh': -1.8, 'cant': -1.7, 'ru': -0.65,
+        'ja-en': -2.1, 'zh': -1.8, 'cant': -1.7, 'ru': -0.65, 'fr': -0.7,
     })
     assert config.ctc_coverage_threshold == 0.8
     assert config.ctc_margin_ms == 500
@@ -137,11 +137,11 @@ def test_video_options_excludes_overloaded_three_language_mode():
 
 def test_language_selection_is_validated_and_part_of_model_job_key():
     fingerprints = set()
-    for language in ("auto", "ja-en", "zh", "cant", "ru"):
+    for language in ("auto", "ja-en", "zh", "cant", "ru", "fr"):
         options = VideoOptions.from_mapping({"alignment_mode": "model", "alignment_language": language})
         assert options.to_dict()["alignment_language"] == language
         fingerprints.add(video_options_fingerprint(options))
-    assert len(fingerprints) == 5
+    assert len(fingerprints) == 6
     assert "alignment_language" not in VideoOptions().to_dict()
     with pytest.raises(VideoError):
         VideoOptions.from_mapping({"alignment_mode": "model", "alignment_language": "unknown"})
