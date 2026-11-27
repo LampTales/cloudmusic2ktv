@@ -129,7 +129,7 @@ def test_global_queue_status_does_not_persist_session(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize(("requested", "cached_language", "fallback"), [
     ("auto", None, True), ("zh", "cant", True), ("cant", "cant", False),
-    ("auto", "cant", True), ("auto", "zh", False),
+    ("auto", "cant", True), ("auto", "zh", False), ("auto", "legacy_zh", True),
     ("ja-en", "legacy_artifact", False), ("zh", "legacy_artifact", True),
 ])
 def test_model_preview_uses_matching_alignment(monkeypatch, tmp_path, requested, cached_language, fallback):
@@ -150,7 +150,11 @@ def test_model_preview_uses_matching_alignment(monkeypatch, tmp_path, requested,
         from types import SimpleNamespace
         import sys
         reading = {} if cached_language == "legacy_artifact" else {"language": cached_language}
+        if cached_language == "legacy_zh":
+            reading = {"language": "zh"}
         alignment = {"stages": {"reading": reading}}
+        if cached_language in {"zh", "cant"}:
+            alignment["stages"]["ctc"] = {"profile": "mms_fa", "status": "done"}
         (directory / "alignment.json").write_text("{}")
         monkeypatch.setattr("cloudmusic2ktv.video._load_alignment_payload", lambda _: alignment)
         monkeypatch.setitem(sys.modules, "lyric_align", SimpleNamespace(

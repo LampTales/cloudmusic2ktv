@@ -58,7 +58,7 @@ RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
 LYRIC_MODES = {"original", "translation", "romanization"}
 LYRIC_HIGHLIGHT_MODES = {"line", "sweep", "smooth"}
 ALIGNMENT_MODES = {"legacy", "model"}
-ALIGNMENT_LANGUAGES = {"auto", "ja-en", "zh", "cant"}
+ALIGNMENT_LANGUAGES = {"auto", "ja-en", "zh", "cant", "ru"}
 PRONUNCIATION_MODES = {"none", "kana", "romaji"}
 AUDIO_MODES = {"original", "instrumental"}
 BACKGROUND_MODES = {"blur", "gradient", "solid", "custom"}
@@ -225,6 +225,9 @@ class VideoProject:
             except ImportError:
                 return False
             language = detect_language(self.directory).language
+        if effective == language and language in {"zh", "cant"}:
+            ctc = self.alignment.get("stages", {}).get("ctc") or {}
+            return ctc.get("profile") == "mms_fa"
         return effective == language
 
     @property
@@ -349,29 +352,17 @@ class FrameRenderer:
 
     @classmethod
     def _smooth_model_sweep_timeline(cls, timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Bridge short visible-character gaps for model sweep rendering.
-
-        ``alignment.json`` is the source of truth and is never modified.  A
-        private copy of its display units is adjusted only when two adjacent
-        non-whitespace characters have a positive gap no larger than the
-        configured threshold.  The gap is split at its midpoint, preserving
-        the original ordering while removing a visible pause.  Explicit
-        whitespace units and longer gaps remain untouched.
-        """
+        """Spread sweep edges into pauses on a renderer-local copy of the units."""
         threshold = cls._sweep_gap_threshold_ms()
         if threshold <= 0:
             return timeline
         smoothed: list[dict[str, Any]] = []
         for line in timeline:
             units = line.get("display_units")
-            if not isinstance(units, list) or len(units) < 2:
+            if not isinstance(units, list) or not units or not all(isinstance(unit, dict) for unit in units):
                 smoothed.append(line)
                 continue
-            copied = dict(line)
-            copied_units = [dict(unit) for unit in units if isinstance(unit, dict)]
-            if len(copied_units) < 2:
-                smoothed.append(copied)
-                continue
+            copied_units = [dict(unit) for unit in units]
             for left, right in zip(copied_units, copied_units[1:]):
                 if not str(left.get("text") or "").strip() or not str(right.get("text") or "").strip():
                     continue
@@ -382,8 +373,28 @@ class FrameRenderer:
                     boundary = left_end + gap // 2
                     left["end_ms"] = boundary
                     right["start_ms"] = boundary
-            copied["display_units"] = copied_units
-            smoothed.append(copied)
+                elif gap > threshold:
+                    left["end_ms"] = left_end + threshold // 2
+                    right["start_ms"] = right_start - threshold // 2
+            tail_index = next((i for i in reversed(range(len(copied_units)))
+                               if any(ch.isalnum() for ch in str(copied_units[i].get("text") or ""))), None)
+            # Use the lyric interval for the last sung character. The extra
+            # time a completed line stays on screen belongs to the transition.
+            if tail_index is not None:
+                tail = copied_units[tail_index]
+                raw_tail = units[tail_index]
+                tail_end = int(raw_tail.get("end_ms", raw_tail.get("start_ms", 0)))
+                if int(line.get("end_ms") or tail_end) - tail_end > threshold:
+                    tail["end_ms"] = tail_end + threshold // 2
+                    # Trailing punctuation can already occupy the release.
+                    # Keep its remaining sweep ordered after the sung ending.
+                    for suffix in copied_units[tail_index + 1:]:
+                        start = int(suffix.get("start_ms", tail_end))
+                        if start >= tail["end_ms"]:
+                            break
+                        suffix["start_ms"] = tail["end_ms"]
+                        suffix["end_ms"] = max(int(suffix.get("end_ms", start)), tail["end_ms"])
+            smoothed.append(dict(line, display_units=copied_units))
         return smoothed
 
     def representative_time_ms(self) -> int:
@@ -1297,16 +1308,27 @@ def _prepare_model_alignment(project: VideoProject, options: VideoOptions, progr
         if source_root not in sys.path:
             sys.path.insert(0, source_root)
     try:
-        from lyric_align import AlignmentConfig, ModelPaths, prepare_song
+        from lyric_align import AlignmentConfig, ModelPaths, StageUnavailableError, prepare_song
     except ImportError as exc:
         raise VideoError("模型预处理依赖 lyric-align 未安装，请先安装 requirements-model.txt 中的依赖") from exc
     ffmpeg = get_ffmpeg_executable()
     demucs_path = os.environ.get("LYRIC_DEMUCS_MODEL_PATH", "").strip() or None
     ctc_path = os.environ.get("LYRIC_CTC_MODEL_PATH", "").strip() or None
-    if not demucs_path or not ctc_path:
-        raise VideoError("模型模式需要配置 LYRIC_DEMUCS_MODEL_PATH 和 LYRIC_CTC_MODEL_PATH")
+    mms_path = os.environ.get("LYRIC_MMS_FA_MODEL_PATH", "/models/torch/hub/checkpoints/model.pt").strip()
+    if not demucs_path:
+        raise VideoError("模型模式需要配置 LYRIC_DEMUCS_MODEL_PATH")
+    if not (ctc_path or mms_path):
+        raise VideoError("模型模式需要配置 LYRIC_CTC_MODEL_PATH 或 LYRIC_MMS_FA_MODEL_PATH")
+    routes = ALIGNMENT_LANGUAGES - {"auto"} if options.alignment_language == "auto" else {options.alignment_language}
+    thresholds = {}
+    for route in routes:
+        suffix = route.upper().replace("-", "_")
+        variable = f"LYRIC_CTC_SCORE_THRESHOLD_{suffix}"
+        value = os.environ.get(variable, "").strip()
+        if value:
+            thresholds[route] = float(value)
     config = AlignmentConfig(
-        models=ModelPaths(demucs_model_path=demucs_path, ctc_model_path=ctc_path),
+        models=ModelPaths(demucs_model_path=demucs_path, ctc_model_path=ctc_path, mms_fa_model_path=mms_path or None),
         language=options.alignment_language,
         g2p_backend=os.environ.get("LYRIC_G2P_BACKEND", "sudachi"),
         device=os.environ.get("LYRIC_DEVICE", "cpu"),
@@ -1322,7 +1344,7 @@ def _prepare_model_alignment(project: VideoProject, options: VideoOptions, progr
         offset_boundary_tolerance_ms=int(os.environ.get("LYRIC_OFFSET_BOUNDARY_TOLERANCE_MS", "800")),
         offset_acoustic_verify=_to_bool(os.environ.get("LYRIC_OFFSET_ACOUSTIC_VERIFY"), False),
         offset_acoustic_min_margin=float(os.environ.get("LYRIC_OFFSET_ACOUSTIC_MIN_MARGIN", "0.15")),
-        ctc_score_threshold=float(os.environ.get("LYRIC_CTC_SCORE_THRESHOLD", "-2.25")),
+        ctc_score_thresholds=thresholds,
         ctc_coverage_threshold=float(os.environ.get("LYRIC_CTC_COVERAGE_THRESHOLD", "0.8")),
         ctc_margin_ms=int(os.environ.get("LYRIC_CTC_MARGIN_MS", "500")),
         ctc_activity_margin_ms=int(os.environ.get("LYRIC_CTC_ACTIVITY_MARGIN_MS", "120")),
@@ -1332,7 +1354,10 @@ def _prepare_model_alignment(project: VideoProject, options: VideoOptions, progr
         ),
         activity_projection_confidence_threshold=float(os.environ.get("LYRIC_ACTIVITY_PROJECTION_CONFIDENCE_THRESHOLD", "0.35")),
     )
-    prepare_song(project.directory, config=config, stages=("reading", "demucs", "ctc"), progress=progress)
+    try:
+        prepare_song(project.directory, config=config, stages=("reading", "demucs", "ctc"), progress=progress)
+    except StageUnavailableError as exc:
+        raise VideoError(str(exc)) from exc
 
 
 class VideoJobManager:

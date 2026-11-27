@@ -262,7 +262,7 @@ def test_mode_specific_common_video_options_are_compact_and_ordered():
     assert 'moveControls(advancedOptions, ["#backgroundModeControl", "#backgroundColorWrap", "#customBackgroundWrap", "#accentModeControl", "#accentColorWrap"])' in script
     language = common.split('<select id="alignmentLanguage" disabled>', 1)[1].split('</select>', 1)[0]
     assert '<option value="auto" selected>自动识别</option>' in language
-    assert all(f'value="{value}"' in language for value in ("ja-en", "zh", "cant"))
+    assert all(f'value="{value}"' in language for value in ("ja-en", "zh", "cant", "ru"))
     assert '...(model ? {alignment_language: $("#alignmentLanguage").value} : {})' in script
     assert 'model ? "自动对齐耗时较长" : "点击切换自动标注"' in script
 

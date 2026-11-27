@@ -66,6 +66,13 @@ export HF_HOME="$PWD/docker-data/models/huggingface"
 - [HTDemucs](https://huggingface.co/adefossez/HTDemucs)，revision `cbc8a9b1a87023b7fd74e7b3412e6321c0eab003`；
 - [NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn](https://huggingface.co/NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn)，revision `2ab2b5f46539ee284703c281f286b01d2410ee12`。
 
+自动识别或手选普通话、粤语、俄语时，需要将 TorchAudio 的 MMS_FA 权重放在挂载目录中。以下命令在后端主机运行一次。模型大小约 1.26 GB，容器内默认路径为 `/models/torch/hub/checkpoints/model.pt`。[TorchAudio 模型说明和许可证](https://docs.pytorch.org/audio/stable/generated/torchaudio.pipelines.MMS_FA.html)
+
+```bash
+mkdir -p docker-data/models/torch/hub/checkpoints
+curl -fL https://dl.fbaipublicfiles.com/mms/torchaudio/ctc_alignment_mling_uroman/model.pt -o docker-data/models/torch/hub/checkpoints/model.pt.part && mv docker-data/models/torch/hub/checkpoints/model.pt.part docker-data/models/torch/hub/checkpoints/model.pt
+```
+
 请同时遵守模型各自的许可证。下载完成后，确保容器用户可读：
 
 ```bash
@@ -124,7 +131,7 @@ docker compose up -d
 3. 搜索歌曲或浏览歌单，先下载全部素材，再在视频面板选择歌词、背景、扫色、分辨率和音频等选项。
 4. 提交生成任务，在队列中查看进度。生成完成后可预览、播放、下载或生成短期投屏链接。
 
-传统模式使用歌曲自带的歌词时间轴；Beta 模式默认自动识别歌词语言，也可手选日语 / 英语、普通话或粤语。该模式支持逐字对齐、读音标注、纯伴奏和平滑扫色，点亮颜色可在高级设置中调整。使用模型模式前须完成上面的模型下载和挂载。
+传统模式使用歌曲自带的歌词时间轴；Beta 模式默认自动识别歌词语言，也可手选日语 / 英语、普通话、粤语或俄语。该模式支持逐字对齐、读音标注、纯伴奏和平滑扫色，点亮颜色可在高级设置中调整。使用模型模式前须完成上面的模型下载和挂载。
 
 角色有 `root`、`admin`、`user` 三种。`root` 可管理其他成员，不能被删除；`admin` 只能管理普通用户。删除成员会撤销访问并清除其账号和网易云绑定，再次使用需要重新注册；共享素材和视频保留。
 
@@ -141,6 +148,8 @@ docker compose up -d
 | `CLOUDMUSIC2KTV_TRUST_PROXY` | 仅在受控反向代理后设为 `1` |
 | `CLOUDMUSIC2KTV_ALLOW_INSECURE_COOKIE_IMPORT` | 仅可信 HTTP 调试网络设为 `1` |
 | `CLOUDMUSIC2KTV_MEDIA_SIGNING_KEY` | 投屏 URL 的 HMAC 密钥；正式环境应固定并备份 |
+| `LYRIC_MMS_FA_MODEL_PATH` | 普通话、粤语和俄语共用的 MMS_FA 权重文件路径 |
+| `LYRIC_CTC_SCORE_THRESHOLD_JA_EN` / `LYRIC_CTC_SCORE_THRESHOLD_ZH` / `LYRIC_CTC_SCORE_THRESHOLD_CANT` / `LYRIC_CTC_SCORE_THRESHOLD_RU` | 日英、普通话、粤语、俄语的独立 CTC 分数门槛，自动与手选共用 |
 | `LYRIC_MODELS_DIR` | 宿主机模型根目录（只读挂载到 `/models`） |
 | `LYRIC_DEMUCS_MODEL_PATH` / `LYRIC_CTC_MODEL_PATH` | 容器内模型 snapshot 路径 |
 | `LYRIC_DEVICE` | 推理设备，当前使用 `cpu` |

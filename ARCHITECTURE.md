@@ -86,7 +86,7 @@
 
 输入歌词只有带时间戳的原文 LRC 行会进入时间轴；空文本在加载时被丢弃，`music`、`interlude`、`instrumental` 等完整标记行在渲染器过滤。模型产物还会把 lyric-align 判定为 `non_sung` 的元数据行过滤；CTC 失败的 `fallback` 行和没有读音的 `unresolved` 行仍保留显示，只使用它们已有的行级或插值时间。合法 alignment 中若所有行都被判定为 `non_sung`，模型时间轴保持为空，不会重新退回旧时间轴。
 
-模型 `smooth` 扫色只在渲染器的临时副本上处理最终 `display_units`：相邻非空白字符之间的正间隔不超过 200ms 时在中点连接；空白字符和更长的间隔保持原样。该阈值是渲染器环境变量 `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS`，不修改 `alignment.json`。
+模型 `smooth` 扫色在渲染器的临时副本上处理最终 `display_units`。默认阈值为 200 ms。句内相邻非空白字符的正间隔在阈值以内时，两字在中点衔接。超过阈值时，两字各向空档延伸半个阈值。最后一个有读音的字符距本句 `end_ms` 超过阈值时，向后延伸半个阈值，尾随标点或空白与它保持先后顺序。连续歌词在下一句起唱前的留屏时间独立计算。将环境变量 `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS` 设为 0 可关闭上述平滑处理。
 
 模型 `smooth`/`sweep` 在连续段落内的句间切换以后一行首个 `display_unit` 的实际起点为准，而不是只使用该行的 `start_ms`。新增延长按“后一行实际起点 − 后一行 `start_ms`”计算，最多 800ms；上一行扫色完成到句末的已有时间不计入该上限。缺少字级时间数据时仍回退到 `start_ms`，段落开头、结尾和间奏边界仍沿用原有的行级时间。
 
@@ -98,17 +98,22 @@
 
 `requirements-model.txt` 通过完整提交 SHA 固定公开的 `lyric_align` 源码归档，镜像构建不依赖 Git；更新时应核实提交已推送到远端。默认导入已安装的包，不自动查找相邻仓库。开发时可使用 editable 安装，或显式设置 `LYRIC_ALIGN_PATH` 为源码的 `src/` 目录覆盖导入路径。
 
-模型权重通过 `LYRIC_*_MODEL_PATH` 指向只读挂载的 Hugging Face snapshot；迁移缓存时必须包含 `blobs/`，不能只复制 snapshot 中的符号链接。容器启用离线模式，模型缺失时不会自动下载。当前使用 NextFire CTC 模型，Sudachi 生成日语 reading 后由库转为拉丁字母目标，英语保留拼写。具体预处理、局部修复和回退策略见独立 `lyric_align` 仓库的 `LIBRARY.md` 和 `PIPELINE.md`。
+模型权重通过 `LYRIC_*_MODEL_PATH` 指向只读挂载的 Hugging Face snapshot；迁移缓存时必须包含 `blobs/`，不能只复制 snapshot 中的符号链接。容器启用离线模式，模型缺失时不会自动下载。普通话和粤语通过拼音或粤拼使用 MMS_FA，俄语使用同一权重。日英使用 NextFire CTC 模型，Sudachi 生成日语 reading 后由库转为拉丁字母目标，英语保留拼写。具体预处理、局部修复和回退策略见独立 `lyric_align` 仓库的 `LIBRARY.md` 和 `PIPELINE.md`。
 
 | 环境变量 | 默认值 | 集成含义 |
 | --- | --- | --- |
-| `LYRIC_CTC_SCORE_THRESHOLD` | `-2.25` | 当前模型的 CTC 平均分质量门 |
+| `LYRIC_CTC_SCORE_THRESHOLD_JA_EN` | `-2.25` | 日英的 CTC 平均分质量门 |
+| `LYRIC_CTC_SCORE_THRESHOLD_ZH` | `-2.25` | 普通话的 CTC 平均分质量门 |
+| `LYRIC_CTC_SCORE_THRESHOLD_CANT` | `-2.25` | 粤语的 CTC 平均分质量门 |
+| `LYRIC_CTC_SCORE_THRESHOLD_RU` | `-0.8` | 俄语的 CTC 平均分质量门 |
 | `LYRIC_CTC_COVERAGE_THRESHOLD` | `0.8` | CTC 词表覆盖率门限 |
 | `LYRIC_CTC_MARGIN_MS` | `500` | 句级搜索窗口扩展量 |
 | `LYRIC_CTC_ACTIVITY_MARGIN_MS` | `120` | 人声边界搜索余量 |
 | `LYRIC_CTC_ACTIVITY_CONFIDENCE_THRESHOLD` | `0.45` | CTC 搜索的人声活动门限 |
 | `LYRIC_ACTIVITY_PROJECTION_CONFIDENCE_THRESHOLD` | `0.35` | 回退时间投影的人声活动门限 |
-| `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS` | `200` | 渲染器平滑扫色可连接的最大字符间隔 |
+| `CLOUDMUSIC2KTV_MODEL_SWEEP_GAP_THRESHOLD_MS` | `200` | 句内可完全衔接的最大间隔，长间隔每侧及句尾最多延伸该值的一半（毫秒） |
+
+自动识别和手选共用对应语言的分数门槛。该语言的配置留空时使用语言档案的默认值。
 
 回退投影使用较低的 activity 门限，以便 CTC 失败时仍尽可能利用人声边界指导扫色。`LYRIC_ACTIVITY_CONFIDENCE_THRESHOLD` 仅作为 CTC 门限的兼容别名：新变量非空时优先，否则读取旧变量，最后使用 `0.45`；它不控制回退投影门限。模板同时保留这种优先级。
 
